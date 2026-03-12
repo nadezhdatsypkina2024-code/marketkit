@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MarketKit — Инструменты маркетолога</title>
+<link href="https://fonts.googleapis.com/css2?family=Neue+Haas+Grotesk:wght@400;500;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="noise"></div>
+
+<header>
+  <div class="logo">Market<span>Kit</span></div>
+  <nav>
+    <a href="#abc" class="nav-link" data-tool="abc">ABC-анализ</a>
+    <a href="#seo" class="nav-link" data-tool="seo">SEO-аудит</a>
+    <a href="#utm" class="nav-link" data-tool="utm">UTM-генератор</a>
+    <a href="#media" class="nav-link" data-tool="media">Медиаплан</a>
+    <a href="#competitors" class="nav-link" data-tool="competitors">Конкуренты</a>
+  </nav>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-eyebrow">Профессиональные инструменты</div>
+    <h1>Всё что нужно<br><span class="accent">маркетологу</span><br>в одном месте</h1>
+    <p class="hero-sub">5 мощных инструментов. Без регистрации. Без подписки.<br>Работает прямо в браузере — данные никуда не уходят.</p>
+    <div class="hero-tools">
+      <div class="tool-card" onclick="showTool('abc')">
+        <div class="tool-icon">📊</div>
+        <div class="tool-name">ABC-анализ</div>
+        <div class="tool-desc">Загрузи данные → получи сегменты A, B, C</div>
+      </div>
+      <div class="tool-card" onclick="showTool('seo')">
+        <div class="tool-icon">🔍</div>
+        <div class="tool-name">SEO-аудит</div>
+        <div class="tool-desc">Вставь ссылку → получи полный аудит</div>
+      </div>
+      <div class="tool-card" onclick="showTool('utm')">
+        <div class="tool-icon">🎯</div>
+        <div class="tool-name">UTM-генератор</div>
+        <div class="tool-desc">Создавай метки быстро и без ошибок</div>
+      </div>
+      <div class="tool-card" onclick="showTool('media')">
+        <div class="tool-icon">📈</div>
+        <div class="tool-name">Медиаплан</div>
+        <div class="tool-desc">Рассчитай бюджет и прогноз охватов</div>
+      </div>
+      <div class="tool-card" onclick="showTool('competitors')">
+        <div class="tool-icon">🏆</div>
+        <div class="tool-name">Анализ конкурентов</div>
+        <div class="tool-desc">Структурированный разбор + экспорт</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ABC ANALYSIS ===== -->
+  <section class="tool-section" id="tool-abc">
+    <div class="section-header">
+      <span class="section-num">01</span>
+      <div>
+        <h2>ABC-анализ</h2>
+        <p>Загрузи CSV файл с данными о продажах — получи сегментацию товаров/клиентов по методу Парето</p>
+      </div>
+    </div>
+
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Загрузка данных</h3>
+        <div class="upload-area" id="abcUpload" onclick="document.getElementById('abcFile').click()">
+          <div class="upload-icon">📁</div>
+          <div class="upload-text">Нажми или перетащи CSV файл</div>
+          <div class="upload-hint">Формат: первая колонка — название, вторая — значение (выручка, количество)</div>
+          <input type="file" id="abcFile" accept=".csv,.txt" style="display:none" onchange="handleABCFile(event)">
+        </div>
+
+        <div class="or-divider">или</div>
+
+        <h4>Вставь данные вручную</h4>
+        <textarea id="abcManual" placeholder="Товар А;15000&#10;Товар Б;8500&#10;Товар В;3200&#10;Товар Г;1100&#10;Товар Д;450" rows="8"></textarea>
+
+        <div class="settings-row">
+          <div class="setting-group">
+            <label>Порог A (%)</label>
+            <input type="number" id="abcThreshA" value="80" min="1" max="99">
+          </div>
+          <div class="setting-group">
+            <label>Порог B (%)</label>
+            <input type="number" id="abcThreshB" value="15" min="1" max="99">
+          </div>
+          <div class="setting-group">
+            <label>Разделитель</label>
+            <select id="abcDelim">
+              <option value=";">; (точка с запятой)</option>
+              <option value=",">, (запятая)</option>
+              <option value="	">Tab</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn-primary" onclick="runABC()">Запустить ABC-анализ →</button>
+      </div>
+
+      <div class="panel" id="abcResults" style="display:none">
+        <div class="results-header">
+          <h3>Результаты</h3>
+          <button class="btn-export" onclick="exportABC()">⬇ Скачать Excel</button>
+        </div>
+
+        <div class="abc-summary" id="abcSummary"></div>
+        <div class="chart-container">
+          <canvas id="abcChart"></canvas>
+        </div>
+        <div class="abc-insights" id="abcInsights"></div>
+        <div class="table-wrap">
+          <table class="data-table" id="abcTable"></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SEO AUDIT ===== -->
+  <section class="tool-section" id="tool-seo">
+    <div class="section-header">
+      <span class="section-num">02</span>
+      <div>
+        <h2>SEO-аудит сайта</h2>
+        <p>Введи URL — получи детальный анализ: мета-теги, заголовки, контент, скорость, технические ошибки и рекомендации</p>
+      </div>
+    </div>
+
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Анализ сайта</h3>
+        <div class="url-input-row">
+          <input type="url" id="seoUrl" placeholder="https://yoursite.ru" class="url-input">
+          <button class="btn-primary" onclick="runSEO()">Анализировать →</button>
+        </div>
+        <div class="seo-options">
+          <label class="checkbox-label">
+            <input type="checkbox" id="seoCheckMeta" checked> Мета-теги
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="seoCheckHeadings" checked> Заголовки H1-H6
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="seoCheckImages" checked> Изображения (alt)
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="seoCheckLinks" checked> Ссылки
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="seoCheckSchema"> Schema разметка
+          </label>
+        </div>
+        <div id="seoLoading" style="display:none" class="loading-bar">
+          <div class="loading-progress"></div>
+          <span id="seoLoadingText">Анализирую...</span>
+        </div>
+      </div>
+
+      <div class="panel" id="seoResults" style="display:none">
+        <div class="results-header">
+          <h3>SEO-отчёт: <span id="seoUrlDisplay"></span></h3>
+          <button class="btn-export" onclick="exportSEO()">⬇ Скачать отчёт</button>
+        </div>
+        <div id="seoScore" class="seo-score-block"></div>
+        <div id="seoReport" class="seo-report-grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== UTM GENERATOR ===== -->
+  <section class="tool-section" id="tool-utm">
+    <div class="section-header">
+      <span class="section-num">03</span>
+      <div>
+        <h2>UTM-генератор</h2>
+        <p>Создавай правильные UTM-ссылки для отслеживания трафика в Google Analytics и Яндекс.Метрике</p>
+      </div>
+    </div>
+
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Параметры ссылки</h3>
+        <div class="form-grid">
+          <div class="form-group full">
+            <label>URL сайта <span class="required">*</span></label>
+            <input type="url" id="utmBase" placeholder="https://yoursite.ru/page" oninput="buildUTM()">
+          </div>
+          <div class="form-group">
+            <label>Источник (utm_source) <span class="required">*</span></label>
+            <input type="text" id="utmSource" placeholder="google, yandex, vk, email" oninput="buildUTM()">
+            <div class="quick-tags">
+              <span onclick="setUTM('source','google')">google</span>
+              <span onclick="setUTM('source','yandex')">yandex</span>
+              <span onclick="setUTM('source','vk')">vk</span>
+              <span onclick="setUTM('source','telegram')">telegram</span>
+              <span onclick="setUTM('source','email')">email</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Канал (utm_medium) <span class="required">*</span></label>
+            <input type="text" id="utmMedium" placeholder="cpc, organic, email, social" oninput="buildUTM()">
+            <div class="quick-tags">
+              <span onclick="setUTM('medium','cpc')">cpc</span>
+              <span onclick="setUTM('medium','organic')">organic</span>
+              <span onclick="setUTM('medium','email')">email</span>
+              <span onclick="setUTM('medium','social')">social</span>
+              <span onclick="setUTM('medium','banner')">banner</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Кампания (utm_campaign) <span class="required">*</span></label>
+            <input type="text" id="utmCampaign" placeholder="spring_sale_2025" oninput="buildUTM()">
+          </div>
+          <div class="form-group">
+            <label>Контент (utm_content)</label>
+            <input type="text" id="utmContent" placeholder="banner_top, button_red" oninput="buildUTM()">
+          </div>
+          <div class="form-group">
+            <label>Ключевое слово (utm_term)</label>
+            <input type="text" id="utmTerm" placeholder="купить кроссовки" oninput="buildUTM()">
+          </div>
+        </div>
+
+        <div class="utm-result-block" id="utmResult">
+          <div class="utm-result-label">Готовая ссылка:</div>
+          <div class="utm-result-url" id="utmFinal">Заполни поля выше...</div>
+          <button class="btn-copy" id="utmCopyBtn" onclick="copyUTM()">📋 Копировать</button>
+        </div>
+
+        <button class="btn-secondary" onclick="saveUTM()">💾 Сохранить в историю</button>
+      </div>
+
+      <div class="panel">
+        <h3>История ссылок</h3>
+        <div id="utmHistory" class="utm-history">
+          <div class="empty-state">Сохранённые ссылки появятся здесь</div>
+        </div>
+        <button class="btn-export" onclick="exportUTMs()">⬇ Скачать все ссылки (Excel)</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== MEDIA PLAN ===== -->
+  <section class="tool-section" id="tool-media">
+    <div class="section-header">
+      <span class="section-num">04</span>
+      <div>
+        <h2>Медиапланирование</h2>
+        <p>Распредели бюджет по каналам, рассчитай прогноз охватов, кликов и конверсий</p>
+      </div>
+    </div>
+
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Параметры кампании</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Общий бюджет (₽)</label>
+            <input type="number" id="mediaBudget" value="100000" oninput="calcMedia()">
+          </div>
+          <div class="form-group">
+            <label>Период (дней)</label>
+            <input type="number" id="mediaDays" value="30" oninput="calcMedia()">
+          </div>
+          <div class="form-group">
+            <label>Целевое действие</label>
+            <select id="mediaGoal" onchange="calcMedia()">
+              <option value="lead">Лид / заявка</option>
+              <option value="sale">Продажа</option>
+              <option value="visit">Визит на сайт</option>
+              <option value="install">Установка приложения</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Ниша</label>
+            <select id="mediaNiche" onchange="calcMedia()">
+              <option value="ecom">E-commerce</option>
+              <option value="b2b">B2B услуги</option>
+              <option value="local">Локальный бизнес</option>
+              <option value="saas">SaaS / IT</option>
+              <option value="beauty">Красота / здоровье</option>
+              <option value="edu">Образование</option>
+            </select>
+          </div>
+        </div>
+
+        <h4>Распределение по каналам</h4>
+        <div id="mediaChannels" class="channels-grid"></div>
+        <button class="btn-secondary" onclick="addChannel()">+ Добавить канал</button>
+      </div>
+
+      <div class="panel" id="mediaResults">
+        <div class="results-header">
+          <h3>Прогноз результатов</h3>
+          <button class="btn-export" onclick="exportMedia()">⬇ Скачать медиаплан</button>
+        </div>
+        <div id="mediaSummary" class="media-summary"></div>
+        <div class="chart-container">
+          <canvas id="mediaChart"></canvas>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="mediaTable"></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== COMPETITOR ANALYSIS ===== -->
+  <section class="tool-section" id="tool-competitors">
+    <div class="section-header">
+      <span class="section-num">05</span>
+      <div>
+        <h2>Анализ конкурентов</h2>
+        <p>Структурированный фреймворк для разбора конкурентов. Заполни карточки и получи сравнительную таблицу</p>
+      </div>
+    </div>
+
+    <div class="tool-body full-width">
+      <div class="panel">
+        <div class="comp-header-row">
+          <h3>Конкуренты</h3>
+          <button class="btn-primary" onclick="addCompetitor()">+ Добавить конкурента</button>
+        </div>
+        <div id="competitorCards" class="competitor-cards"></div>
+      </div>
+
+      <div class="panel" id="compResults" style="display:none">
+        <div class="results-header">
+          <h3>Сравнительная таблица</h3>
+          <button class="btn-export" onclick="exportCompetitors()">⬇ Скачать анализ (Excel)</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table comparison-table" id="compTable"></table>
+        </div>
+        <div id="compInsights" class="comp-insights"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-logo">MarketKit</div>
+    <div class="footer-note">Данные обрабатываются локально в браузере и никуда не передаются</div>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
