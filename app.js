@@ -38,13 +38,48 @@ document.querySelectorAll('.nav-link').forEach(link => {
 function handleABCFile(event) {
   const file = event.target.files[0];
   if (!file) return;
+
+  const uploadArea = document.getElementById('abcUpload');
+  const uploadText = uploadArea.querySelector('.upload-text');
+
+  // XLSX / XLS
+  if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        // Convert first two columns to CSV-like format
+        const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:B1');
+        const lines = [];
+        for (let r = range.s.r; r <= range.e.r; r++) {
+          const nameCell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
+          const valCell  = ws[XLSX.utils.encode_cell({ r, c: 1 })];
+          if (nameCell && valCell) {
+            const name = String(nameCell.v || '').trim();
+            const val  = String(valCell.v  || '').trim();
+            if (name && val) lines.push(name + ';' + val);
+          }
+        }
+        document.getElementById('abcManual').value = lines.join('\n');
+        uploadArea.style.borderColor = 'var(--green)';
+        uploadText.textContent = '✅ ' + file.name + ' загружен (' + lines.length + ' строк)';
+      } catch(err) {
+        uploadText.textContent = '❌ Ошибка чтения Excel файла';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    return;
+  }
+
+  // CSV / TXT (existing logic)
   const reader = new FileReader();
   reader.onload = (e) => {
     if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
       document.getElementById('abcManual').value = e.target.result;
     }
-    document.getElementById('abcUpload').style.borderColor = 'var(--green)';
-    document.getElementById('abcUpload').querySelector('.upload-text').textContent = '✅ ' + file.name + ' загружен';
+    uploadArea.style.borderColor = 'var(--green)';
+    uploadText.textContent = '✅ ' + file.name + ' загружен';
   };
   reader.readAsText(file, 'UTF-8');
 }
@@ -708,6 +743,11 @@ function exportMedia() {
   XLSX.writeFile(wb, 'Медиаплан.xlsx');
 }
 
+function toggleMediaFormulas() {
+  const el = document.getElementById('mediaFormulas');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
 // ════════════════════════════════════════════
 //  05 — COMPETITOR ANALYSIS
 // ════════════════════════════════════════════
@@ -889,21 +929,42 @@ async function parseProducts() {
   document.getElementById('productLoadingText').textContent = 'Загружаю каталог...';
 
   try {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
     let html = '';
-    try {
-      document.getElementById('productLoadingText').textContent = 'Получаю данные...';
-      const res = await fetch(proxyUrl);
-      const data = await res.json();
-      html = data.contents || '';
-    } catch(e) { html = ''; }
+
+    // Try multiple proxies
+    const proxies = [
+      `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+      `https://corsproxy.io/?${encodeURIComponent(url)}`
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        document.getElementById('productLoadingText').textContent = 'Получаю данные...';
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+        const data = await res.json();
+        html = data.contents || data.body || '';
+        if (html.length > 500) break;
+      } catch(e) { html = ''; }
+    }
 
     document.getElementById('productLoadingText').textContent = 'Анализирую товары...';
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 300));
 
-    const products = extractProducts(html, url, siteName);
+    let products = extractProducts(html, url, siteName);
+
+    // If no products found, try Claude API extraction
+    if (products.length === 0 && html.length > 200) {
+      document.getElementById('productLoadingText').textContent = '🤖 Подключаю ИИ-анализ...';
+      products = await extractProductsWithClaude(html, siteName);
+    }
+
+    // If HTML was blocked/empty, use Claude with just the URL
+    if (products.length === 0 && html.length < 200) {
+      document.getElementById('productLoadingText').textContent = '🤖 Сайт заблокировал прямой доступ, запрашиваю ИИ...';
+      products = await extractProductsByUrlWithClaude(url, siteName);
+    }
+
     const color = SOURCE_COLORS[productSources.length % SOURCE_COLORS.length];
-
     productSources.push({ name: siteName, url, color, count: products.length });
     allProducts.push(...products.map(p => ({ ...p, source: siteName, sourceColor: color })));
 
@@ -913,10 +974,59 @@ async function parseProducts() {
 
     document.getElementById('productUrl').value = '';
     document.getElementById('productSiteName').value = '';
+
+    if (products.length === 0) {
+      showInlineError('productUrl', `Продукты не найдены. Сайт может блокировать парсинг.`);
+    }
   } catch(e) {
     showInlineError('productUrl', 'Ошибка загрузки. Попробуй другой сайт.');
   }
   loading.style.display = 'none';
+}
+
+async function extractProductsWithClaude(html, siteName) {
+  try {
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .slice(0, 12000);
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: 'Ты извлекаешь товары с веб-страниц. Отвечай ТОЛЬКО валидным JSON-массивом без markdown.',
+        messages: [{ role: 'user', content: `Извлеки список товаров из этого текста страницы каталога интернет-магазина. Верни JSON-массив: [{"name":"название","price":"цена с символом валюты","brand":"бренд или пустая строка","specs":{},"rating":"рейтинг или пустая строка"}]. Если товаров нет — верни []. Текст:\n\n${text}` }]
+      })
+    });
+    const data = await resp.json();
+    const raw = data.content?.[0]?.text || '[]';
+    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    return Array.isArray(parsed) ? parsed.map(p => ({ name: p.name || '', price: p.price || '', brand: p.brand || '', specs: p.specs || {}, rating: p.rating || '' })).filter(p => p.name) : [];
+  } catch(e) { return []; }
+}
+
+async function extractProductsByUrlWithClaude(url, siteName) {
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: 'Ты маркетинговый аналитик. Отвечай ТОЛЬКО валидным JSON-массивом без markdown.',
+        messages: [{ role: 'user', content: `На основе своих знаний о сайте ${url} (магазин "${siteName}"), перечисли типичные товары или категории товаров, которые там продаются. Верни JSON-массив: [{"name":"название товара/категории","price":"примерная цена или диапазон","brand":"бренд","specs":{},"rating":""}]. Максимум 20 позиций. Если сайт тебе не известен — верни [].` }]
+      })
+    });
+    const data = await resp.json();
+    const raw = data.content?.[0]?.text || '[]';
+    const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
+    return Array.isArray(parsed) ? parsed.map(p => ({ name: p.name || '', price: p.price || '', brand: p.brand || '', specs: p.specs || {}, rating: p.rating || '' })).filter(p => p.name) : [];
+  } catch(e) { return []; }
 }
 
 function extractProducts(html, url, siteName) {
@@ -1225,7 +1335,162 @@ function showInlineError(inputId, msg) {
 }
 
 // ════════════════════════════════════════════
-//  07 — INN COMPANY ANALYSIS
+//  05b — COMPETITOR AUTO-ANALYSIS (Claude AI)
+// ════════════════════════════════════════════
+
+async function autoAnalyzeCompetitor() {
+  const input = document.getElementById('compAutoUrl').value.trim();
+  if (!input) {
+    showInlineError('compAutoUrl', 'Введи URL сайта или название компании');
+    return;
+  }
+
+  const loading = document.getElementById('compAutoLoading');
+  const result  = document.getElementById('compAutoResult');
+  loading.style.display = 'flex';
+  result.style.display  = 'none';
+  document.getElementById('compAutoLoadingText').textContent = 'Загружаю данные о конкуренте...';
+
+  let htmlContext = '';
+  const isUrl = input.startsWith('http');
+
+  // Try to fetch page via proxies
+  if (isUrl) {
+    const proxies = [
+      `https://api.allorigins.win/get?url=${encodeURIComponent(input)}`,
+      `https://corsproxy.io/?${encodeURIComponent(input)}`
+    ];
+    for (const proxy of proxies) {
+      try {
+        document.getElementById('compAutoLoadingText').textContent = 'Получаю страницу конкурента...';
+        const res = await fetch(proxy, { signal: AbortSignal.timeout(8000) });
+        const data = await res.json();
+        htmlContext = (data.contents || data.body || '').slice(0, 18000);
+        if (htmlContext.length > 200) break;
+      } catch(e) {}
+    }
+    // Strip heavy tags, keep text
+    htmlContext = htmlContext
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .slice(0, 12000);
+  }
+
+  document.getElementById('compAutoLoadingText').textContent = 'ИИ анализирует конкурента...';
+
+  try {
+    const systemPrompt = `Ты эксперт-маркетолог. Анализируй конкурентов и отвечай ТОЛЬКО валидным JSON без markdown-оберток.`;
+
+    const userPrompt = isUrl && htmlContext.length > 100
+      ? `Проанализируй этого конкурента по тексту их сайта. URL: ${input}\n\nТекст страницы:\n${htmlContext}\n\nВерни JSON строго такого формата:\n{"name":"название компании","tagline":"слоган/позиционирование","usp":"главное УТП 1-2 предложения","products":"топ-3-5 продуктов или услуг через запятую","pricing":"бюджетный/средний/премиум — обоснуй кратко","audience":"целевая аудитория","channels":"заметные каналы маркетинга (SEO, соцсети, контекст и пр.)","strengths":["сильная сторона 1","сильная сторона 2","сильная сторона 3"],"weaknesses":["слабая сторона 1","слабая сторона 2"],"opportunities":["возможность для вас 1","возможность для вас 2"],"summary":"итоговый вывод 2-3 предложения"}`
+      : `Проанализируй компанию-конкурента: "${input}"\n\nИспользуй свои знания об этой компании или отрасли. Верни JSON строго такого формата:\n{"name":"название компании","tagline":"слоган/позиционирование","usp":"главное УТП","products":"топ-3-5 продуктов или услуг","pricing":"ценовой сегмент","audience":"целевая аудитория","channels":"маркетинговые каналы","strengths":["сильная сторона 1","сильная сторона 2","сильная сторона 3"],"weaknesses":["слабая сторона 1","слабая сторона 2"],"opportunities":["возможность для вас 1","возможность для вас 2"],"summary":"итоговый вывод"}`;
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+    });
+
+    const data = await resp.json();
+    const raw  = data.content?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const comp  = JSON.parse(clean);
+
+    loading.style.display = 'none';
+    renderCompAutoResult(comp, input);
+
+  } catch(e) {
+    loading.style.display = 'none';
+    result.style.display = 'block';
+    result.innerHTML = `<div class="abc-insights" style="border-color:var(--red)">⚠️ Не удалось получить анализ. Попробуй ввести название компании вместо URL, или используй ручной анализ ниже.</div>`;
+  }
+}
+
+function renderCompAutoResult(c, sourceInput) {
+  const result = document.getElementById('compAutoResult');
+  result.style.display = 'block';
+
+  const tagsHtml = (arr, color) => (arr || []).map(t =>
+    `<span style="display:inline-block;background:${color}20;color:${color};border:1px solid ${color}40;border-radius:6px;padding:3px 10px;font-size:12px;margin:3px">${t}</span>`
+  ).join('');
+
+  result.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:12px;overflow:hidden">
+      <div style="background:var(--accent);color:#0a0a0f;padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:700;font-size:18px">${c.name || sourceInput}</div>
+          <div style="font-size:13px;opacity:0.7;margin-top:2px">${c.tagline || ''}</div>
+        </div>
+        <button onclick="addAutoCompetitorToTable()" style="background:#0a0a0f;color:var(--accent);border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600">+ В таблицу</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+        ${compInfoRow('🎯 УТП', c.usp)}
+        ${compInfoRow('📦 Продукты / услуги', c.products)}
+        ${compInfoRow('💰 Ценовой сегмент', c.pricing)}
+        ${compInfoRow('👥 Аудитория', c.audience)}
+        ${compInfoRow('📣 Каналы маркетинга', c.channels)}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:20px;background:var(--bg2)">
+        <div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">✅ Сильные стороны</div>
+          ${tagsHtml(c.strengths, 'var(--green)')}
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">❌ Слабые стороны</div>
+          ${tagsHtml(c.weaknesses, 'var(--red)')}
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">💡 Ваши возможности</div>
+          ${tagsHtml(c.opportunities, 'var(--blue)')}
+        </div>
+      </div>
+      <div style="padding:16px 20px;border-top:1px solid var(--border);font-size:13px;color:var(--text2)">
+        <strong style="color:var(--accent)">📊 Вывод:</strong> ${c.summary || ''}
+      </div>
+    </div>
+  `;
+
+  // Store last analyzed competitor for "add to table"
+  window._lastAutoComp = c;
+}
+
+function compInfoRow(label, value) {
+  return `<div style="padding:12px 20px;border-bottom:1px solid var(--border)">
+    <div style="font-size:11px;color:var(--text3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.05em">${label}</div>
+    <div style="font-size:13px;color:var(--text1)">${value || '—'}</div>
+  </div>`;
+}
+
+function addAutoCompetitorToTable() {
+  const c = window._lastAutoComp;
+  if (!c) return;
+  competitors.push({
+    id: Date.now(),
+    name: c.name || 'Конкурент',
+    url: document.getElementById('compAutoUrl').value.trim(),
+    description: c.tagline || '',
+    usp: c.usp || '',
+    pricing: c.pricing || '',
+    audience: c.audience || '',
+    social: 'Средняя',
+    seo: 'Средние',
+    content: c.channels || '',
+    rating: 3,
+    notes: c.summary || ''
+  });
+  renderCompetitors();
+  document.getElementById('competitorCards').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ════════════════════════════════════════════
+//  07 — INN COMPANY ANALYSIS (legacy, hidden)
 // ════════════════════════════════════════════
 
 let innSaved = []; // array of company data objects
@@ -1821,118 +2086,147 @@ function renderPDFErrors() {
 async function exportPDFReport() {
   if (!pdfErrors.length && pdfPageCount === 0) { alert('Сначала загрузи и проверь PDF'); return; }
 
-  // Load jsPDF
-  if (!window.jspdf) {
-    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-  }
+  const spellC = pdfErrors.filter(e => e.type === 'spell').length;
+  const repC   = pdfErrors.filter(e => e.type === 'repeat').length;
+  const pageSet = [...new Set(pdfErrors.map(e => e.page))].length;
 
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const typeMap = { spell: 'Орфография', repeat: 'Повтор слова', punct: 'Пунктуация' };
 
-  // Font setup — use built-in for Cyrillic via UTF-8
-  doc.setFont('helvetica');
-
-  const pageW = 210, margin = 15, contentW = pageW - margin * 2;
-  let y = margin;
-
-  const addText = (text, size, bold, color) => {
-    doc.setFontSize(size);
-    doc.setFont('helvetica', bold ? 'bold' : 'normal');
-    if (color) doc.setTextColor(...color);
-    else doc.setTextColor(30, 30, 30);
-    const lines = doc.splitTextToSize(text, contentW);
-    if (y + lines.length * (size * 0.4) > 290) { doc.addPage(); y = margin; }
-    doc.text(lines, margin, y);
-    y += lines.length * (size * 0.45) + 2;
-  };
-
-  const addLine = () => {
-    doc.setDrawColor(220, 220, 220);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
-  };
-
-  // Header
-  doc.setFillColor(10, 10, 15);
-  doc.rect(0, 0, 210, 30, 'F');
-  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
-  doc.setTextColor(232, 255, 71);
-  doc.text('MarketKit', margin, 15);
-  doc.setFontSize(11); doc.setFont('helvetica', 'normal');
-  doc.setTextColor(200, 200, 220);
-  doc.text('Otchet proverki orfografii PDF', margin, 22);
-  y = 38;
-
-  // Meta
-  addText('Fayl: ' + pdfFileName, 11, false, [100, 100, 130]);
-  addText('Data: ' + new Date().toLocaleDateString('ru-RU') + '  |  Stranits: ' + pdfPageCount, 10, false, [100,100,130]);
-  y += 4; addLine();
-
-  // Summary
-  const spellC = pdfErrors.filter(e=>e.type==='spell').length;
-  const repC = pdfErrors.filter(e=>e.type==='repeat').length;
-  addText('SVODKA', 13, true, [100, 100, 180]);
-  y += 2;
-
-  const stats = [
-    ['Orfograficheskih oshibok:', String(spellC), spellC > 0 ? [220,50,50] : [50,180,100]],
-    ['Povtorov slov:', String(repC), repC > 0 ? [200,120,50] : [50,180,100]],
-    ['Stranits s oshibkami:', String([...new Set(pdfErrors.map(e=>e.page))].length), [80,80,120]],
-    ['Vsego stranits:', String(pdfPageCount), [80,80,120]],
+  // Summary sheet
+  const summary = [
+    { Параметр: 'Файл', Значение: pdfFileName },
+    { Параметр: 'Дата проверки', Значение: new Date().toLocaleDateString('ru-RU') },
+    { Параметр: 'Всего страниц', Значение: pdfPageCount },
+    { Параметр: 'Орфографических ошибок', Значение: spellC },
+    { Параметр: 'Повторов слов', Значение: repC },
+    { Параметр: 'Страниц с ошибками', Значение: pageSet },
+    { Параметр: 'ИТОГО ошибок', Значение: pdfErrors.length },
   ];
 
-  stats.forEach(([label, val, color]) => {
-    doc.setFontSize(11); doc.setFont('helvetica', 'normal'); doc.setTextColor(60,60,60);
-    doc.text(label, margin, y);
-    doc.setFont('helvetica', 'bold'); doc.setTextColor(...color);
-    doc.text(val, margin + 75, y);
-    y += 7;
+  // Errors sheet
+  const errors = pdfErrors.map((e, i) => ({
+    '№': i + 1,
+    'Страница': 'Стр. ' + e.page,
+    'Тип': typeMap[e.type] || e.type,
+    'Слово с ошибкой': e.word,
+    'Вариант исправления': e.suggestions.join(', ') || '—',
+    'Контекст': e.context.replace(/\*\*/g, ''),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsSummary = XLSX.utils.json_to_sheet(summary);
+  wsSummary['!cols'] = [{ wch: 28 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Сводка');
+
+  if (errors.length) {
+    const wsErrors = XLSX.utils.json_to_sheet(errors);
+    wsErrors['!cols'] = [{ wch: 5 }, { wch: 10 }, { wch: 16 }, { wch: 22 }, { wch: 28 }, { wch: 80 }];
+    XLSX.utils.book_append_sheet(wb, wsErrors, 'Ошибки');
+  }
+
+  XLSX.writeFile(wb, 'Проверка-орфографии-' + pdfFileName.replace('.pdf', '') + '.xlsx');
+}
+
+// ════════════════════════════════════════════
+//  09 — ROI CALCULATOR
+// ════════════════════════════════════════════
+
+function calcROI() {
+  const budget  = +document.getElementById('roiBudget').value  || 0;
+  const revenue = +document.getElementById('roiRevenue').value || 0;
+  const cogs    = +document.getElementById('roiCOGS').value    || 0;
+  const extra   = +document.getElementById('roiExtra').value   || 0;
+  const clicks  = +document.getElementById('roiClicks').value  || 0;
+  const leads   = +document.getElementById('roiLeads').value   || 0;
+  const sales   = +document.getElementById('roiSales').value   || 0;
+  const aov     = +document.getElementById('roiAOV').value     || 0;
+
+  const totalCost  = budget + extra;
+  const grossProfit = revenue - cogs;
+  const netProfit  = grossProfit - totalCost;
+  const roi        = totalCost > 0 ? ((netProfit / totalCost) * 100) : 0;
+  const roas       = budget > 0 ? (revenue / budget) : 0;
+  const cpc        = clicks > 0 ? (budget / clicks) : 0;
+  const cpl        = leads > 0  ? (budget / leads)  : 0;
+  const cpa        = sales > 0  ? (budget / sales)  : 0;
+  const cr_click2lead = clicks > 0 && leads > 0 ? (leads / clicks * 100) : 0;
+  const cr_lead2sale  = leads > 0 && sales > 0  ? (sales / leads * 100)  : 0;
+  const breakEvenRev  = totalCost + cogs;
+
+  const roiColor = roi >= 100 ? 'var(--green)' : roi >= 0 ? 'var(--accent)' : 'var(--red)';
+  const roasColor = roas >= 3 ? 'var(--green)' : roas >= 1 ? 'var(--accent)' : 'var(--red)';
+  const npColor   = netProfit >= 0 ? 'var(--green)' : 'var(--red)';
+
+  document.getElementById('roiKpis').innerHTML = `
+    <div class="media-kpi"><div class="media-kpi-val" style="color:${roiColor}">${roi.toFixed(1)}%</div><div class="media-kpi-label">ROI</div></div>
+    <div class="media-kpi"><div class="media-kpi-val" style="color:${roasColor}">${roas.toFixed(2)}x</div><div class="media-kpi-label">ROAS</div></div>
+    <div class="media-kpi"><div class="media-kpi-val" style="color:${npColor}">${fmt(netProfit)} ₽</div><div class="media-kpi-label">Чистая прибыль</div></div>
+    <div class="media-kpi"><div class="media-kpi-val">${fmt(grossProfit)} ₽</div><div class="media-kpi-label">Валовая прибыль</div></div>
+    <div class="media-kpi"><div class="media-kpi-val">${cpc > 0 ? fmt(cpc) + ' ₽' : '—'}</div><div class="media-kpi-label">CPC</div></div>
+    <div class="media-kpi"><div class="media-kpi-val">${cpl > 0 ? fmt(cpl) + ' ₽' : '—'}</div><div class="media-kpi-label">CPL (цена лида)</div></div>
+    <div class="media-kpi"><div class="media-kpi-val">${cpa > 0 ? fmt(cpa) + ' ₽' : '—'}</div><div class="media-kpi-label">CPA (цена продажи)</div></div>
+    <div class="media-kpi"><div class="media-kpi-val">${fmt(breakEvenRev)} ₽</div><div class="media-kpi-label">Точка безубыточности</div></div>
+  `;
+
+  const roiLabel = roi >= 200 ? '🚀 Отличный результат' : roi >= 100 ? '✅ Хорошо' : roi >= 0 ? '⚠️ В плюсе, но слабо' : '❌ Убыток';
+  const roasLabel = roas >= 4 ? 'Отличный ROAS' : roas >= 2 ? 'Норм ROAS' : roas >= 1 ? 'ROAS ниже нормы' : 'ROAS < 1 — реклама убыточна';
+
+  document.getElementById('roiBreakdown').innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px">
+      <h4 style="margin-bottom:16px;color:var(--accent)">📋 Детальный разбор</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+        ${roiDetailRow('Рекламный бюджет', fmt(budget) + ' ₽', 'var(--text2)')}
+        ${roiDetailRow('Прочие расходы', fmt(extra) + ' ₽', 'var(--text2)')}
+        ${roiDetailRow('Итого затрат', fmt(totalCost) + ' ₽', 'var(--orange)')}
+        ${roiDetailRow('Выручка', fmt(revenue) + ' ₽', 'var(--text1)')}
+        ${roiDetailRow('Себестоимость', fmt(cogs) + ' ₽', 'var(--text2)')}
+        ${roiDetailRow('Валовая прибыль', fmt(grossProfit) + ' ₽', 'var(--text1)')}
+        ${roiDetailRow('Чистая прибыль', fmt(netProfit) + ' ₽', npColor)}
+        ${cr_click2lead > 0 ? roiDetailRow('Клик → Лид CR', cr_click2lead.toFixed(1) + '%', 'var(--blue)') : ''}
+        ${cr_lead2sale > 0 ? roiDetailRow('Лид → Продажа CR', cr_lead2sale.toFixed(1) + '%', 'var(--blue)') : ''}
+      </div>
+      <div style="margin-top:16px;padding:12px;background:${roi >= 0 ? 'rgba(66,255,176,0.08)' : 'rgba(255,91,91,0.08)'};border-radius:8px">
+        <strong style="color:${roiColor}">${roiLabel}</strong> · ${roasLabel}<br>
+        <span style="font-size:12px;color:var(--text2);margin-top:4px;display:block">
+          Точка безубыточности: нужно выручки минимум <strong>${fmt(breakEvenRev)} ₽</strong> чтобы окупить все затраты.
+          ${revenue < breakEvenRev ? `До безубыточности не хватает <strong style="color:var(--red)">${fmt(breakEvenRev - revenue)} ₽</strong>.` : `Ты выше точки безубыточности на <strong style="color:var(--green)">${fmt(revenue - breakEvenRev)} ₽</strong>.`}
+        </span>
+      </div>
+    </div>
+  `;
+}
+
+function roiDetailRow(label, value, color) {
+  return `<div style="padding:8px 12px;background:var(--bg3);border-radius:6px;display:flex;justify-content:space-between">
+    <span style="color:var(--text2)">${label}</span>
+    <strong style="color:${color}">${value}</strong>
+  </div>`;
+}
+
+function exportROI() {
+  const fields = [
+    ['Рекламный бюджет', document.getElementById('roiBudget').value + ' ₽'],
+    ['Выручка', document.getElementById('roiRevenue').value + ' ₽'],
+    ['Себестоимость', document.getElementById('roiCOGS').value + ' ₽'],
+    ['Прочие расходы', document.getElementById('roiExtra').value + ' ₽'],
+    ['Клики', document.getElementById('roiClicks').value],
+    ['Лиды', document.getElementById('roiLeads').value],
+    ['Продажи', document.getElementById('roiSales').value],
+    ['Средний чек', document.getElementById('roiAOV').value + ' ₽'],
+  ];
+  // Grab KPIs from DOM
+  const kpiEls = document.querySelectorAll('#roiKpis .media-kpi');
+  kpiEls.forEach(el => {
+    const val = el.querySelector('.media-kpi-val')?.textContent?.trim();
+    const lbl = el.querySelector('.media-kpi-label')?.textContent?.trim();
+    if (lbl && val) fields.push([lbl, val]);
   });
-
-  y += 4; addLine();
-
-  // Errors list
-  addText('SPISOK OSHIBOK', 13, true, [100,100,180]);
-  y += 2;
-
-  if (pdfErrors.length === 0) {
-    addText('Oshibok ne naydeno! Tekst proshel proverku.', 12, false, [50,180,100]);
-  } else {
-    const typeMap = { spell: 'Orfografiya', repeat: 'Povtor', punct: 'Punktuatsiya' };
-    pdfErrors.slice(0, 300).forEach((e, i) => {
-      if (y > 275) { doc.addPage(); y = margin; }
-      const prefix = `[Str.${e.page}] [${typeMap[e.type]||e.type}]`;
-      const suggest = e.suggestions.length ? ' -> ' + e.suggestions.join(', ') : '';
-      const line = `${i+1}. ${prefix}  "${e.word}"${suggest}`;
-      doc.setFontSize(9);
-      doc.setFont('helvetica', e.type === 'spell' ? 'bold' : 'normal');
-      doc.setTextColor(e.type === 'spell' ? 180 : 150, 50, 50);
-      doc.text(String(i+1) + '.', margin, y);
-      doc.setTextColor(60,60,60); doc.setFont('helvetica','normal');
-      doc.text(prefix, margin + 8, y);
-      doc.setTextColor(e.type === 'spell' ? 180 : 100, 50, 50); doc.setFont('helvetica','bold');
-      doc.text('"' + e.word + '"', margin + 52, y);
-      if (suggest) {
-        doc.setTextColor(50, 150, 80); doc.setFont('helvetica','normal');
-        doc.text(suggest, margin + 52 + doc.getTextWidth('"' + e.word + '"') + 2, y);
-      }
-      y += 6;
-    });
-    if (pdfErrors.length > 300) {
-      addText('... i esche ' + (pdfErrors.length - 300) + ' oshibok', 9, false, [150,100,100]);
-    }
-  }
-
-  // Footer
-  const pageCount = doc.internal.getNumberOfPages();
-  for (let i = 1; i <= pageCount; i++) {
-    doc.setPage(i);
-    doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(180,180,180);
-    doc.text('MarketKit © Tsypkina Nadezhda  |  t.me/nadya_tsypkina', margin, 293);
-    doc.text(`${i} / ${pageCount}`, pageW - margin, 293, { align: 'right' });
-  }
-
-  doc.save('Proverka-orfografii-' + pdfFileName.replace('.pdf','') + '.pdf');
+  const data = fields.map(([Параметр, Значение]) => ({ Параметр, Значение }));
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{ wch: 30 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'ROI-анализ');
+  XLSX.writeFile(wb, 'ROI-анализ.xlsx');
 }
 
 // ════════════════════════════════════════════
@@ -1959,3 +2253,4 @@ initMediaChannels();
 addCompetitor();
 addCompetitor();
 renderUTMHistory();
+calcROI();

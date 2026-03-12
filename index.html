@@ -20,7 +20,7 @@
     <a href="#media" class="nav-link" data-tool="media">Медиаплан</a>
     <a href="#competitors" class="nav-link" data-tool="competitors">Конкуренты</a>
     <a href="#products" class="nav-link" data-tool="products">Продукты</a>
-    <a href="#inn" class="nav-link" data-tool="inn">Анализ по ИНН</a>
+    <a href="#roi" class="nav-link" data-tool="roi">ROI-калькулятор</a>
     <a href="#pdfcheck" class="nav-link" data-tool="pdfcheck">Проверка PDF</a>
   </nav>
 </header>
@@ -63,10 +63,10 @@
         <div class="tool-name">Анализ продуктов</div>
         <div class="tool-desc">Вставь URL каталога → таблица товаров конкурента</div>
       </div>
-      <div class="tool-card" onclick="showTool('inn')">
-        <div class="tool-icon">🏢</div>
-        <div class="tool-name">Анализ по ИНН</div>
-        <div class="tool-desc">Введи ИНН → открытые данные о компании конкурента</div>
+      <div class="tool-card" onclick="showTool('roi')">
+        <div class="tool-icon">💹</div>
+        <div class="tool-name">ROI-калькулятор</div>
+        <div class="tool-desc">Считай окупаемость, ROAS и точку безубыточности</div>
       </div>
       <div class="tool-card" onclick="showTool('pdfcheck')">
         <div class="tool-icon">📋</div>
@@ -92,8 +92,8 @@
         <div class="upload-area" id="abcUpload" onclick="document.getElementById('abcFile').click()">
           <div class="upload-icon">📁</div>
           <div class="upload-text">Нажми или перетащи CSV файл</div>
-          <div class="upload-hint">Формат: первая колонка — название, вторая — значение (выручка, количество)</div>
-          <input type="file" id="abcFile" accept=".csv,.txt" style="display:none" onchange="handleABCFile(event)">
+          <div class="upload-hint">Форматы: CSV, TXT, Excel (.xlsx). Первая колонка — название, вторая — значение</div>
+          <input type="file" id="abcFile" accept=".csv,.txt,.xlsx,.xls" style="display:none" onchange="handleABCFile(event)">
         </div>
 
         <div class="or-divider">или</div>
@@ -317,7 +317,29 @@
       <div class="panel" id="mediaResults">
         <div class="results-header">
           <h3>Прогноз результатов</h3>
-          <button class="btn-export" onclick="exportMedia()">⬇ Скачать медиаплан</button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn-secondary" style="margin-top:0;font-size:12px" onclick="toggleMediaFormulas()">ℹ️ Формулы и погрешности</button>
+            <button class="btn-export" onclick="exportMedia()">⬇ Скачать медиаплан</button>
+          </div>
+        </div>
+        <div id="mediaFormulas" style="display:none;margin-bottom:20px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px">
+          <h4 style="color:var(--accent);margin-bottom:12px">📐 Как считается медиаплан</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px;color:var(--text2)">
+            <div><strong style="color:var(--text1)">Бюджет на канал</strong><br>Бюджет канала = Общий бюджет × (% канала / Сумма всех %)</div>
+            <div><strong style="color:var(--text1)">Клики</strong><br>Если CPC > 0: Клики = Бюджет / CPC<br>Если CPC = 0 (SEO): Клики = Бюджет × 10</div>
+            <div><strong style="color:var(--text1)">Показы</strong><br>Показы = (Клики / CTR%) × 100</div>
+            <div><strong style="color:var(--text1)">Лиды</strong><br>Лиды = Клики × CR%</div>
+            <div><strong style="color:var(--text1)">CPL (цена лида)</strong><br>CPL = Бюджет канала / Лиды</div>
+            <div><strong style="color:var(--text1)">Средний CPL</strong><br>CPL общий = Весь бюджет / Все лиды</div>
+          </div>
+          <div style="margin-top:16px;padding:12px;background:rgba(255,150,50,0.1);border-radius:8px;font-size:12px;color:var(--text2)">
+            <strong style="color:var(--orange)">⚠️ Погрешности и ограничения:</strong><br>
+            • CPC, CTR, CR — усреднённые бенчмарки по рынку. Реальные значения могут отличаться в 1,5–3× в зависимости от ниши, качества объявлений и сезонности<br>
+            • CTR для контекстной рекламы варьируется от 1% до 15%+ — зависит от конкуренции по ключевым словам и релевантности объявлений<br>
+            • CR (конверсия) сильно зависит от качества лендинга, офера и температуры трафика. Погрешность ±50–100%<br>
+            • Для SEO/органики бюджет отражает вложения в продвижение, а не прямой закуп кликов — расчёт условный<br>
+            • Медиаплан является <strong>прогнозом</strong>, а не гарантией. Используй его как стартовую точку, корректируй по реальным данным после 2–4 недель кампании
+          </div>
         </div>
         <div id="mediaSummary" class="media-summary"></div>
         <div class="chart-container">
@@ -341,9 +363,25 @@
     </div>
 
     <div class="tool-body full-width">
+
+      <!-- AUTO ANALYSIS PANEL -->
+      <div class="panel">
+        <h3>🤖 Авто-анализ конкурента по URL или названию</h3>
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Введи сайт конкурента или название компании — ИИ проанализирует позиционирование, продукты, аудиторию, сильные и слабые стороны</p>
+        <div class="url-input-row">
+          <input type="text" id="compAutoUrl" placeholder="https://competitor.ru  или  «Название компании»" class="url-input">
+          <button class="btn-primary" onclick="autoAnalyzeCompetitor()">Анализировать →</button>
+        </div>
+        <div id="compAutoLoading" style="display:none;margin-top:16px" class="loading-bar">
+          <div class="loading-progress"></div>
+          <span id="compAutoLoadingText">Анализирую конкурента...</span>
+        </div>
+        <div id="compAutoResult" style="display:none;margin-top:20px"></div>
+      </div>
+
       <div class="panel">
         <div class="comp-header-row">
-          <h3>Конкуренты</h3>
+          <h3>Ручной анализ конкурентов</h3>
           <button class="btn-primary" onclick="addCompetitor()">+ Добавить конкурента</button>
         </div>
         <div id="competitorCards" class="competitor-cards"></div>
@@ -433,56 +471,61 @@
     </div>
   </section>
 
-  <!-- ===== INN COMPANY ANALYSIS ===== -->
-  <section class="tool-section" id="tool-inn">
+  <!-- ===== ROI CALCULATOR ===== -->
+  <section class="tool-section" id="tool-roi">
     <div class="section-header">
       <span class="section-num">07</span>
       <div>
-        <h2>Анализ компании по ИНН</h2>
-        <p>Введи ИНН конкурента — получи открытые данные: регистрация, выручка, сотрудники, адрес, руководство и маркетинговый анализ</p>
+        <h2>ROI-калькулятор</h2>
+        <p>Считай окупаемость рекламы, ROAS, точку безубыточности и чистую прибыль с кампании</p>
       </div>
     </div>
     <div class="tool-body">
       <div class="panel">
-        <h3>Поиск компании</h3>
-        <div class="url-input-row">
-          <input type="text" id="innInput" placeholder="Введи ИНН (10 или 12 цифр)" class="url-input" maxlength="12"
-            oninput="this.value=this.value.replace(/\D/g,'')">
-          <button class="btn-primary" onclick="runINN()">Найти →</button>
+        <h3>Параметры кампании</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Рекламный бюджет (₽)</label>
+            <input type="number" id="roiBudget" value="50000" oninput="calcROI()">
+          </div>
+          <div class="form-group">
+            <label>Доход с кампании (₽)</label>
+            <input type="number" id="roiRevenue" value="150000" oninput="calcROI()">
+          </div>
+          <div class="form-group">
+            <label>Себестоимость проданного (₽)</label>
+            <input type="number" id="roiCOGS" value="60000" oninput="calcROI()" placeholder="0 если услуги/SaaS">
+          </div>
+          <div class="form-group">
+            <label>Прочие расходы (₽)</label>
+            <input type="number" id="roiExtra" value="5000" oninput="calcROI()" placeholder="агентство, инструменты…">
+          </div>
+          <div class="form-group">
+            <label>Кол-во кликов</label>
+            <input type="number" id="roiClicks" value="2000" oninput="calcROI()">
+          </div>
+          <div class="form-group">
+            <label>Кол-во лидов / заявок</label>
+            <input type="number" id="roiLeads" value="80" oninput="calcROI()">
+          </div>
+          <div class="form-group">
+            <label>Кол-во продаж</label>
+            <input type="number" id="roiSales" value="20" oninput="calcROI()">
+          </div>
+          <div class="form-group">
+            <label>Средний чек (₽)</label>
+            <input type="number" id="roiAOV" value="7500" oninput="calcROI()">
+          </div>
         </div>
-        <div class="seo-options" style="margin-top:8px">
-          <span style="font-size:12px;color:var(--text3)">Примеры ИНН: </span>
-          <span class="quick-tags" style="display:inline-flex">
-            <span onclick="document.getElementById('innInput').value='7707083893'">Сбербанк</span>
-            <span onclick="document.getElementById('innInput').value='7734307378'">Леруа</span>
-            <span onclick="document.getElementById('innInput').value='5047055192'">Петрович</span>
-          </span>
-        </div>
-        <div id="innLoading" style="display:none" class="loading-bar">
-          <div class="loading-progress"></div>
-          <span>Запрашиваю открытые данные...</span>
-        </div>
-        <div id="innError" style="display:none;margin-top:16px" class="abc-insights"></div>
-
-        <div id="innSavedList" style="margin-top:24px"></div>
       </div>
 
-      <div class="panel" id="innResults" style="display:none">
+      <div class="panel" id="roiResults">
         <div class="results-header">
-          <h3 id="innCompanyName">—</h3>
-          <button class="btn-export" onclick="exportINN()">⬇ Скачать отчёт</button>
+          <h3>Результаты расчёта</h3>
+          <button class="btn-export" onclick="exportROI()">⬇ Скачать отчёт (Excel)</button>
         </div>
-        <div id="innReport"></div>
-      </div>
-    </div>
-
-    <div class="tool-body" style="margin-top:24px" id="innCompareBlock" style="display:none">
-      <div class="panel" id="innComparePanel" style="display:none">
-        <div class="results-header">
-          <h3>Сравнение компаний</h3>
-          <button class="btn-export" onclick="exportInnCompare()">⬇ Скачать сравнение</button>
-        </div>
-        <div class="table-wrap"><table class="data-table comparison-table" id="innCompareTable"></table></div>
+        <div id="roiKpis" class="media-summary" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))"></div>
+        <div id="roiBreakdown" style="margin-top:20px"></div>
       </div>
     </div>
   </section>
@@ -543,7 +586,7 @@
       <div class="panel" id="pdfResults" style="display:none">
         <div class="results-header">
           <h3>Результаты проверки</h3>
-          <button class="btn-export" onclick="exportPDFReport()">⬇ Скачать PDF-отчёт</button>
+          <button class="btn-export" onclick="exportPDFReport()">⬇ Скачать отчёт (Excel)</button>
         </div>
         <div id="pdfSummary" class="pdf-summary"></div>
         <div style="margin:16px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
