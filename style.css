@@ -697,13 +697,140 @@ canvas { border-radius: 10px; max-height: 280px; }
 /* ── FOOTER ── */
 footer {
   border-top: 1px solid var(--border);
-  padding: 32px 40px;
+  padding: 28px 40px;
   margin-top: 80px;
 }
-.footer-inner { display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; }
-.footer-logo { font-family: var(--font-head); font-weight: 800; font-size: 18px; }
+.footer-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  max-width: 1200px; margin: 0 auto;
+  flex-wrap: wrap; gap: 12px;
+}
+.footer-logo {
+  font-family: var(--font-head); font-weight: 800; font-size: 18px;
+}
 .footer-logo::after { content: 'Kit'; color: var(--accent); }
+.footer-copy { font-size: 13px; color: var(--text2); display: flex; align-items: center; gap: 12px; }
+.tg-link { color: var(--blue); text-decoration: none; transition: color 0.2s; }
+.tg-link:hover { color: var(--accent); }
 .footer-note { font-size: 12px; color: var(--text3); }
+
+/* ── PRODUCT ANALYSIS ── */
+.product-sources { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.source-tag {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 8px 14px; font-size: 13px;
+}
+.source-tag .src-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.source-tag button { background: none; border: none; color: var(--text3); cursor: pointer; font-size: 16px; padding: 0; line-height: 1; }
+.source-tag button:hover { color: var(--red); }
+
+.product-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;
+}
+.prod-stat {
+  background: var(--bg3); border-radius: 10px; padding: 14px; text-align: center;
+}
+.prod-stat-val { font-family: var(--font-head); font-size: 20px; font-weight: 700; color: var(--accent); }
+.prod-stat-label { font-size: 11px; color: var(--text3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.8px; }
+
+.price-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600;
+}
+.price-low { background: rgba(66,255,176,0.15); color: var(--green); }
+.price-mid { background: rgba(232,255,71,0.12); color: var(--accent); }
+.price-high { background: rgba(255,92,172,0.12); color: var(--pink); }
+
+@media (max-width: 900px) {
+  .product-stats { grid-template-columns: 1fr 1fr; }
+  footer { padding: 24px 20px; }
+}
+
+/* ── INN ANALYSIS ── */
+.inn-card-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;
+}
+.inn-block {
+  background: var(--bg3); border-radius: 12px; padding: 18px;
+}
+.inn-block-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text3); margin-bottom: 12px;
+}
+.inn-row {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; gap: 12px;
+}
+.inn-row:last-child { border-bottom: none; }
+.inn-label { color: var(--text3); flex-shrink: 0; }
+.inn-value { color: var(--text); text-align: right; font-weight: 500; word-break: break-word; }
+.inn-value.green { color: var(--green); }
+.inn-value.red { color: var(--red); }
+.inn-value.yellow { color: var(--accent); }
+
+.inn-score-bar {
+  height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px;
+}
+.inn-score-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; }
+
+.inn-marketing-grid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 16px;
+}
+.inn-marketing-card {
+  background: var(--bg3); border-radius: 10px; padding: 14px;
+  border-left: 3px solid var(--accent);
+}
+.inn-marketing-card h5 { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.8px; }
+.inn-marketing-card p { font-size: 12px; color: var(--text2); line-height: 1.6; }
+
+.inn-saved-list { display: flex; flex-direction: column; gap: 8px; }
+.inn-saved-item {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 14px; font-size: 13px; cursor: pointer;
+  transition: border-color 0.2s;
+}
+.inn-saved-item:hover { border-color: var(--accent); }
+.inn-saved-name { font-weight: 600; }
+.inn-saved-meta { color: var(--text3); font-size: 12px; }
+
+/* ── PDF CHECKER ── */
+.pdf-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;
+}
+.pdf-stat {
+  background: var(--bg3); border-radius: 10px; padding: 14px; text-align: center;
+}
+.pdf-stat-val { font-family: var(--font-head); font-size: 24px; font-weight: 700; }
+.pdf-stat-val.error { color: var(--red); }
+.pdf-stat-val.warn { color: var(--orange); }
+.pdf-stat-val.ok { color: var(--green); }
+.pdf-stat-label { font-size: 11px; color: var(--text3); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.8px; }
+
+.pdf-error-item {
+  background: var(--bg3); border-radius: 10px; padding: 14px 18px;
+  margin-bottom: 8px; border-left: 3px solid transparent;
+  display: grid; grid-template-columns: 90px 80px 1fr auto; gap: 12px; align-items: center;
+  font-size: 13px;
+}
+.pdf-error-item.spell { border-left-color: var(--red); }
+.pdf-error-item.repeat { border-left-color: var(--orange); }
+.pdf-error-item.punct { border-left-color: var(--blue); }
+.pdf-error-page { font-weight: 700; color: var(--text2); }
+.pdf-error-type { font-size: 11px; padding: 2px 8px; border-radius: 5px; text-align: center; font-weight: 600; }
+.pdf-error-item.spell .pdf-error-type { background: rgba(255,71,87,0.15); color: var(--red); }
+.pdf-error-item.repeat .pdf-error-type { background: rgba(255,140,66,0.15); color: var(--orange); }
+.pdf-error-item.punct .pdf-error-type { background: rgba(91,143,255,0.15); color: var(--blue); }
+.pdf-error-word { color: var(--text); }
+.pdf-error-word strong { color: var(--red); text-decoration: underline wavy var(--red); }
+.pdf-error-suggest { font-size: 12px; color: var(--green); }
+
+@media (max-width: 768px) {
+  .inn-card-grid { grid-template-columns: 1fr; }
+  .inn-marketing-grid { grid-template-columns: 1fr; }
+  .pdf-summary { grid-template-columns: 1fr 1fr; }
+  .pdf-error-item { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; }
+}
 
 /* ── ANIMATIONS ── */
 @keyframes fadeUp {

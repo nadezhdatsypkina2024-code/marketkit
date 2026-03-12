@@ -69,12 +69,26 @@ if (uploadArea) {
 }
 
 function runABC() {
-  const raw = document.getElementById('abcManual').value.trim();
+  const textarea = document.getElementById('abcManual');
+  const raw = textarea.value.trim();
   const delim = document.getElementById('abcDelim').value;
   const threshA = parseFloat(document.getElementById('abcThreshA').value) || 80;
   const threshB = parseFloat(document.getElementById('abcThreshB').value) || 15;
 
-  if (!raw) { alert('Введи данные или загрузи файл!'); return; }
+  // Check if textarea only has placeholder-like demo text and is empty logically
+  const isPlaceholder = raw === 'Товар А;15000\nТовар Б;8500\nТовар В;3200\nТовар Г;1100\nТовар Д;450' ||
+                        raw === 'Товар А;15000' || !raw;
+
+  // Allow demo data to run — only block if truly empty
+  if (!raw) {
+    // Show friendly inline error instead of alert
+    const btn = document.querySelector('#tool-abc .btn-primary');
+    const orig = btn.textContent;
+    btn.textContent = '⚠ Введи данные или загрузи файл!';
+    btn.style.background = 'var(--orange)';
+    setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 2500);
+    return;
+  }
 
   const lines = raw.split('\n').filter(l => l.trim());
   abcData = [];
@@ -89,7 +103,14 @@ function runABC() {
     }
   }
 
-  if (abcData.length === 0) { alert('Не удалось прочитать данные. Проверь формат и разделитель.'); return; }
+  if (abcData.length === 0) {
+    const btn = document.querySelector('#tool-abc .btn-primary');
+    const orig = btn.textContent;
+    btn.textContent = '⚠ Проверь формат: Название;Число';
+    btn.style.background = 'var(--orange)';
+    setTimeout(() => { btn.textContent = orig; btn.style.background = ''; }, 3000);
+    return;
+  }
 
   abcData.sort((a, b) => b.value - a.value);
   const total = abcData.reduce((s, d) => s + d.value, 0);
@@ -843,6 +864,1075 @@ function exportCompetitors() {
   ws['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 40 }, { wch: 20 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 12 }, { wch: 50 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Анализ конкурентов');
   XLSX.writeFile(wb, 'Анализ-конкурентов.xlsx');
+}
+
+// ════════════════════════════════════════════
+//  06 — PRODUCT ANALYSIS (Competitor Catalog Parser)
+// ════════════════════════════════════════════
+
+let productSources = []; // { name, url, color, products[] }
+let allProducts = [];    // flat list
+
+const SOURCE_COLORS = ['#e8ff47','#5b8fff','#42ffb0','#ff5bac','#ff8c42','#b8ff00'];
+
+async function parseProducts() {
+  const url = document.getElementById('productUrl').value.trim();
+  const siteName = document.getElementById('productSiteName').value.trim() ||
+    (() => { try { return new URL(url).hostname.replace('www.',''); } catch { return 'Сайт ' + (productSources.length + 1); } })();
+
+  if (!url || !url.startsWith('http')) {
+    showInlineError('productUrl', 'Введи корректный URL!'); return;
+  }
+
+  const loading = document.getElementById('productLoading');
+  loading.style.display = 'flex';
+  document.getElementById('productLoadingText').textContent = 'Загружаю каталог...';
+
+  try {
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    let html = '';
+    try {
+      document.getElementById('productLoadingText').textContent = 'Получаю данные...';
+      const res = await fetch(proxyUrl);
+      const data = await res.json();
+      html = data.contents || '';
+    } catch(e) { html = ''; }
+
+    document.getElementById('productLoadingText').textContent = 'Анализирую товары...';
+    await new Promise(r => setTimeout(r, 400));
+
+    const products = extractProducts(html, url, siteName);
+    const color = SOURCE_COLORS[productSources.length % SOURCE_COLORS.length];
+
+    productSources.push({ name: siteName, url, color, count: products.length });
+    allProducts.push(...products.map(p => ({ ...p, source: siteName, sourceColor: color })));
+
+    renderProductSources();
+    renderProductTable();
+    renderProductInsights();
+
+    document.getElementById('productUrl').value = '';
+    document.getElementById('productSiteName').value = '';
+  } catch(e) {
+    showInlineError('productUrl', 'Ошибка загрузки. Попробуй другой сайт.');
+  }
+  loading.style.display = 'none';
+}
+
+function extractProducts(html, url, siteName) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const products = [];
+
+  // Strategy 1: JSON-LD structured data (most reliable)
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    try {
+      const data = JSON.parse(script.textContent);
+      const items = Array.isArray(data) ? data : (data['@graph'] || [data]);
+      items.forEach(item => {
+        if (item['@type'] === 'Product' || item['@type'] === 'ItemList') {
+          if (item['@type'] === 'Product') {
+            products.push(parseSchemaProduct(item));
+          }
+          if (item.itemListElement) {
+            item.itemListElement.forEach(el => {
+              if (el.item) products.push(parseSchemaProduct(el.item));
+            });
+          }
+        }
+      });
+    } catch(e) {}
+  });
+
+  // Strategy 2: Common e-commerce HTML patterns
+  if (products.length === 0) {
+    const selectors = [
+      '.product-card', '.product-item', '.catalog-item', '.goods-item',
+      '.product', '[data-product]', '.item-card', '.product__item',
+      '.catalog__item', '.card-product', '[class*="product-card"]',
+      '[class*="ProductCard"]', '[class*="product_card"]',
+      '.b-product-grid-item', '.n-catalog-2-item'
+    ];
+
+    let cards = [];
+    for (const sel of selectors) {
+      cards = Array.from(doc.querySelectorAll(sel));
+      if (cards.length >= 2) break;
+    }
+
+    // Fallback: find price patterns
+    if (cards.length === 0) {
+      const priceEls = doc.querySelectorAll('[class*="price"],[class*="Price"],[class*="cost"],[class*="Cost"]');
+      priceEls.forEach(el => {
+        const container = el.closest('li, article, div[class*="item"], div[class*="card"], div[class*="product"]');
+        if (container && !cards.includes(container)) cards.push(container);
+      });
+    }
+
+    cards.slice(0, 200).forEach(card => {
+      const product = extractFromCard(card);
+      if (product.name) products.push(product);
+    });
+  }
+
+  // Strategy 3: Table-based catalogs
+  if (products.length === 0) {
+    doc.querySelectorAll('table').forEach(table => {
+      const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
+      if (headers.length > 1) {
+        table.querySelectorAll('tbody tr').forEach(row => {
+          const cells = Array.from(row.querySelectorAll('td')).map(td => td.textContent.trim());
+          if (cells.length > 0 && cells[0]) {
+            const product = { name: cells[0], price: '', brand: '', specs: {}, rating: '' };
+            headers.forEach((h, i) => {
+              if (i === 0) return;
+              const hl = h.toLowerCase();
+              if (cells[i]) {
+                if (hl.includes('цен') || hl.includes('стоим')) product.price = cells[i];
+                else if (hl.includes('бренд') || hl.includes('производ') || hl.includes('марк')) product.brand = cells[i];
+                else if (hl.includes('рейтинг') || hl.includes('оценк')) product.rating = cells[i];
+                else product.specs[h] = cells[i];
+              }
+            });
+            products.push(product);
+          }
+        });
+      }
+    });
+  }
+
+  return products.filter(p => p.name && p.name.length > 2).slice(0, 150);
+}
+
+function parseSchemaProduct(item) {
+  const price = item.offers?.price || item.offers?.lowPrice || '';
+  const specs = {};
+  if (item.additionalProperty) {
+    item.additionalProperty.forEach(prop => {
+      if (prop.name && prop.value) specs[prop.name] = prop.value;
+    });
+  }
+  return {
+    name: item.name || '',
+    price: price ? price + ' ₽' : '',
+    brand: item.brand?.name || item.manufacturer || '',
+    specs,
+    rating: item.aggregateRating?.ratingValue || '',
+    description: item.description?.slice(0, 120) || ''
+  };
+}
+
+function extractFromCard(card) {
+  const getText = (sels) => {
+    for (const s of sels) {
+      const el = card.querySelector(s);
+      if (el?.textContent.trim()) return el.textContent.trim();
+    }
+    return '';
+  };
+
+  const name = getText([
+    'h2','h3','h4',
+    '[class*="title"],[class*="Title"],[class*="name"],[class*="Name"]',
+    '[class*="heading"],[class*="caption"]',
+    'a[title]'
+  ]) || card.querySelector('a')?.title || '';
+
+  const rawPrice = getText([
+    '[class*="price"],[class*="Price"],[class*="cost"],[class*="Cost"]',
+    '[class*="amount"],[class*="Amount"]',
+    '[itemprop="price"]'
+  ]);
+  const price = rawPrice ? rawPrice.replace(/[^\d\s.,₽руб]/gi, '').trim().slice(0, 30) : '';
+
+  const brand = getText([
+    '[class*="brand"],[class*="Brand"],[class*="vendor"],[class*="manufacturer"]',
+    '[itemprop="brand"]'
+  ]);
+
+  const rating = getText([
+    '[class*="rating"],[class*="Rating"],[class*="stars"],[class*="Stars"]',
+    '[itemprop="ratingValue"]'
+  ]);
+
+  // Extract specs from dl/dt/dd or characteristic lists
+  const specs = {};
+  card.querySelectorAll('dl, ul[class*="spec"], ul[class*="char"], table[class*="spec"]').forEach(list => {
+    const dts = list.querySelectorAll('dt, th');
+    const dds = list.querySelectorAll('dd, td');
+    dts.forEach((dt, i) => {
+      if (dds[i] && dt.textContent.trim() && dds[i].textContent.trim()) {
+        specs[dt.textContent.trim().slice(0,40)] = dds[i].textContent.trim().slice(0, 60);
+      }
+    });
+  });
+
+  return { name: name.slice(0, 100), price, brand, specs, rating };
+}
+
+function renderProductSources() {
+  const container = document.getElementById('productSources');
+  if (!productSources.length) { container.innerHTML = ''; return; }
+  container.innerHTML = productSources.map((s, i) => `
+    <div class="source-tag">
+      <div class="src-dot" style="background:${s.color}"></div>
+      <span><strong>${s.name}</strong> · ${s.count} товаров</span>
+      <button onclick="removeSource(${i})">×</button>
+    </div>
+  `).join('');
+
+  // Update filter dropdown
+  const filterSel = document.getElementById('productFilterSite');
+  filterSel.innerHTML = '<option value="all">Все сайты</option>' +
+    productSources.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+}
+
+function removeSource(i) {
+  const name = productSources[i].name;
+  productSources.splice(i, 1);
+  allProducts = allProducts.filter(p => p.source !== name);
+  renderProductSources();
+  renderProductTable();
+  renderProductInsights();
+}
+
+function renderProductTable() {
+  if (!allProducts.length) return;
+
+  const filterSite = document.getElementById('productFilterSite').value;
+  const sortBy = document.getElementById('productSort').value;
+  const search = document.getElementById('productSearch').value.toLowerCase();
+
+  let products = allProducts.filter(p => {
+    if (filterSite !== 'all' && p.source !== filterSite) return false;
+    if (search && !p.name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (sortBy === 'price_asc') products.sort((a, b) => parsePrice(a.price) - parsePrice(b.price));
+  if (sortBy === 'price_desc') products.sort((a, b) => parsePrice(b.price) - parsePrice(a.price));
+  if (sortBy === 'name') products.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  // Collect all unique spec keys
+  const allSpecKeys = [...new Set(products.flatMap(p => Object.keys(p.specs || {})))].slice(0, 8);
+  const prices = products.map(p => parsePrice(p.price)).filter(p => p > 0);
+  const minP = Math.min(...prices), maxP = Math.max(...prices);
+
+  const getPriceBadge = (priceStr) => {
+    const p = parsePrice(priceStr);
+    if (!p || prices.length < 3) return priceStr;
+    const third = (maxP - minP) / 3;
+    const cls = p <= minP + third ? 'price-low' : p <= minP + third * 2 ? 'price-mid' : 'price-high';
+    const label = p <= minP + third ? '↓' : p <= minP + third * 2 ? '~' : '↑';
+    return `<span class="price-badge ${cls}">${priceStr || '—'} ${label}</span>`;
+  };
+
+  document.getElementById('productStats').innerHTML = `
+    <div class="prod-stat"><div class="prod-stat-val">${products.length}</div><div class="prod-stat-label">Товаров</div></div>
+    <div class="prod-stat"><div class="prod-stat-val">${productSources.length}</div><div class="prod-stat-label">Источников</div></div>
+    <div class="prod-stat"><div class="prod-stat-val">${prices.length ? fmt(Math.min(...prices)) + ' ₽' : '—'}</div><div class="prod-stat-label">Мин. цена</div></div>
+    <div class="prod-stat"><div class="prod-stat-val">${prices.length ? fmt(Math.max(...prices)) + ' ₽' : '—'}</div><div class="prod-stat-label">Макс. цена</div></div>
+  `;
+
+  const specHeaders = allSpecKeys.map(k => `<th>${k.slice(0, 20)}</th>`).join('');
+  const rows = products.map(p => `
+    <tr>
+      <td><span class="src-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.sourceColor};margin-right:6px"></span>${p.source}</td>
+      <td style="max-width:260px;font-weight:500">${p.name}</td>
+      <td>${p.brand || '—'}</td>
+      <td>${getPriceBadge(p.price)}</td>
+      <td>${p.rating || '—'}</td>
+      ${allSpecKeys.map(k => `<td style="font-size:12px;color:var(--text2)">${p.specs?.[k] || '—'}</td>`).join('')}
+    </tr>
+  `).join('');
+
+  document.getElementById('productTable').innerHTML = `
+    <thead><tr><th>Источник</th><th>Название</th><th>Бренд</th><th>Цена</th><th>Рейтинг</th>${specHeaders}</tr></thead>
+    <tbody>${rows}</tbody>
+  `;
+
+  document.getElementById('productResults').style.display = 'block';
+}
+
+function renderProductInsights() {
+  if (!allProducts.length) return;
+
+  const prices = allProducts.map(p => parsePrice(p.price)).filter(p => p > 0);
+  const bySource = {};
+  productSources.forEach(s => {
+    const sProds = allProducts.filter(p => p.source === s.name);
+    const sPrices = sProds.map(p => parsePrice(p.price)).filter(p => p > 0);
+    bySource[s.name] = {
+      count: sProds.length,
+      avgPrice: sPrices.length ? Math.round(sPrices.reduce((a, b) => a + b, 0) / sPrices.length) : 0,
+      minPrice: sPrices.length ? Math.min(...sPrices) : 0,
+      maxPrice: sPrices.length ? Math.max(...sPrices) : 0,
+      brands: [...new Set(sProds.map(p => p.brand).filter(Boolean))].length,
+      color: s.color
+    };
+  });
+
+  const avgAll = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
+
+  document.getElementById('productInsights').innerHTML = Object.entries(bySource).map(([name, d]) => `
+    <div class="seo-section">
+      <div class="seo-section-title"><span class="src-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${d.color}"></span> ${name}</div>
+      <div class="seo-item"><span class="seo-status">📦</span><div class="seo-item-content"><div class="seo-item-label">Товаров: ${d.count}</div></div></div>
+      <div class="seo-item"><span class="seo-status">💰</span><div class="seo-item-content"><div class="seo-item-label">Ср. цена: ${fmt(d.avgPrice)} ₽</div><div class="seo-item-value">от ${fmt(d.minPrice)} до ${fmt(d.maxPrice)} ₽</div></div></div>
+      <div class="seo-item"><span class="seo-status">🏷</span><div class="seo-item-content"><div class="seo-item-label">Брендов: ${d.brands}</div></div></div>
+      ${d.avgPrice && avgAll ? `<div class="seo-rec">Позиционирование: ${d.avgPrice < avgAll * 0.9 ? '⬇ Ниже рынка — бюджетный сегмент' : d.avgPrice > avgAll * 1.1 ? '⬆ Выше рынка — премиум' : '≈ Около среднего по рынку'}</div>` : ''}
+    </div>
+  `).join('');
+
+  document.getElementById('productInsightPanel').style.display = 'block';
+}
+
+function parsePrice(str) {
+  if (!str) return 0;
+  const match = str.replace(/\s/g, '').match(/[\d.,]+/);
+  if (!match) return 0;
+  return parseFloat(match[0].replace(',', '.')) || 0;
+}
+
+function exportProducts() {
+  if (!allProducts.length) return;
+  const allSpecKeys = [...new Set(allProducts.flatMap(p => Object.keys(p.specs || {})))];
+  const data = allProducts.map(p => {
+    const row = { 'Источник': p.source, 'Название': p.name, 'Бренд': p.brand || '', 'Цена': p.price || '', 'Рейтинг': p.rating || '' };
+    allSpecKeys.forEach(k => { row[k] = p.specs?.[k] || ''; });
+    return row;
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws, 'Продукты конкурентов');
+  XLSX.writeFile(wb, 'Анализ-продуктов.xlsx');
+}
+
+function clearProducts() {
+  productSources = []; allProducts = [];
+  document.getElementById('productSources').innerHTML = '';
+  document.getElementById('productResults').style.display = 'none';
+  document.getElementById('productInsightPanel').style.display = 'none';
+  document.getElementById('productFilterSite').innerHTML = '<option value="all">Все сайты</option>';
+}
+
+function showInlineError(inputId, msg) {
+  const input = document.getElementById(inputId);
+  const orig = input.style.borderColor;
+  input.style.borderColor = 'var(--red)';
+  input.placeholder = msg;
+  setTimeout(() => { input.style.borderColor = orig; }, 2500);
+}
+
+// ════════════════════════════════════════════
+//  07 — INN COMPANY ANALYSIS
+// ════════════════════════════════════════════
+
+let innSaved = []; // array of company data objects
+
+async function runINN() {
+  const inn = document.getElementById('innInput').value.trim();
+  if (!inn || inn.length < 10) {
+    showInlineError('innInput', 'ИНН должен содержать 10 или 12 цифр');
+    return;
+  }
+
+  const loading = document.getElementById('innLoading');
+  const errEl = document.getElementById('innError');
+  loading.style.display = 'flex';
+  errEl.style.display = 'none';
+  document.getElementById('innResults').style.display = 'none';
+
+  try {
+    // Primary: EGRUL/open data via dadata suggestions API (no key needed for basic)
+    let company = null;
+
+    // Try dadata.ru free suggest endpoint
+    try {
+      const r = await fetch('https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': 'Token ' + 'b1a3b06ad3f51e5e3c0fab5a47f20c00d3a2a940' },
+        body: JSON.stringify({ query: inn, count: 1 })
+      });
+      if (r.ok) {
+        const data = await r.json();
+        if (data.suggestions && data.suggestions.length > 0) {
+          company = parseDadata(data.suggestions[0]);
+        }
+      }
+    } catch(e) {}
+
+    // Fallback: try open EGRUL API
+    if (!company) {
+      try {
+        const r2 = await fetch(`https://egrul.itsoft.ru/${inn}.json`);
+        if (r2.ok) {
+          const d2 = await r2.json();
+          company = parseEgrulData(d2, inn);
+        }
+      } catch(e) {}
+    }
+
+    // Final fallback: construct what we can from INN structure
+    if (!company) {
+      company = buildFromINN(inn);
+    }
+
+    loading.style.display = 'none';
+    renderINNReport(company);
+
+    // Save to list
+    if (!innSaved.find(c => c.inn === inn)) {
+      innSaved.unshift(company);
+      renderInnSaved();
+    }
+
+  } catch(e) {
+    loading.style.display = 'none';
+    errEl.style.display = 'block';
+    errEl.innerHTML = '⚠️ Не удалось получить данные. Проверь ИНН и попробуй снова.';
+  }
+}
+
+function parseDadata(s) {
+  const d = s.data;
+  return {
+    inn: d.inn,
+    kpp: d.kpp || '—',
+    ogrn: d.ogrn || '—',
+    name: d.name?.short_with_opf || d.name?.full_with_opf || s.value,
+    nameFull: d.name?.full_with_opf || s.value,
+    type: d.type === 'LEGAL' ? 'Юридическое лицо' : 'ИП',
+    status: d.state?.status === 'ACTIVE' ? 'Действующая' : d.state?.status === 'LIQUIDATED' ? 'Ликвидирована' : d.state?.status || '—',
+    regDate: d.state?.registration_date ? new Date(d.state.registration_date).toLocaleDateString('ru-RU') : '—',
+    liquidDate: d.state?.liquidation_date ? new Date(d.state.liquidation_date).toLocaleDateString('ru-RU') : null,
+    address: d.address?.value || '—',
+    region: d.address?.data?.region_with_type || '—',
+    city: d.address?.data?.city || d.address?.data?.settlement || '—',
+    okved: d.okved || '—',
+    okvedName: d.okved_type || '—',
+    okvedAll: d.okveds?.slice(0, 5).map(o => o.code + ' ' + (o.name || '')).join('; ') || '—',
+    manager: d.management?.name || '—',
+    managerPost: d.management?.post || '—',
+    employees: d.employee_count ? String(d.employee_count) : '—',
+    capital: d.finance?.ustavnoj_kapital ? fmt(d.finance.ustavnoj_kapital) + ' ₽' : '—',
+    revenue: d.finance?.revenue ? fmt(d.finance.revenue) + ' ₽' : '—',
+    profit: d.finance?.net_income ? fmt(d.finance.net_income) + ' ₽' : '—',
+    taxSystem: d.finance?.tax_system || '—',
+    phones: d.phones?.map(p => p.value).join(', ') || '—',
+    emails: d.emails?.map(e => e.value).join(', ') || '—',
+    site: d.site || '—',
+    source: 'dadata'
+  };
+}
+
+function parseEgrulData(d, inn) {
+  return {
+    inn,
+    kpp: d.КПП || '—',
+    ogrn: d.ОГРН || '—',
+    name: d.НаимСокрЮЛ || d.НаимПолнЮЛ || `Компания ИНН ${inn}`,
+    nameFull: d.НаимПолнЮЛ || '—',
+    type: 'Юридическое лицо',
+    status: d.СвСтатус?.НаимСтатусЮЛ || 'Действующая',
+    regDate: d.ДатаОГРН || '—',
+    address: d.АдрЮЛФИАС?.АдресПолн || '—',
+    region: '—', city: '—',
+    okved: d.СвОКВЭД?.КодОКВЭД || '—',
+    okvedName: d.СвОКВЭД?.НаимОКВЭД || '—',
+    okvedAll: '—',
+    manager: d.СвРуководство?.РуководительЮЛ?.ФИОРуководителя || '—',
+    managerPost: d.СвРуководство?.РуководительЮЛ?.НаимДолжн || '—',
+    employees: '—', capital: '—', revenue: '—', profit: '—',
+    taxSystem: '—', phones: '—', emails: '—', site: '—',
+    source: 'egrul'
+  };
+}
+
+function buildFromINN(inn) {
+  const regionCode = inn.slice(0, 2);
+  const regions = {
+    '77':'Москва','78':'Санкт-Петербург','50':'Московская обл.','23':'Краснодарский край',
+    '66':'Свердловская обл.','74':'Челябинская обл.','16':'Татарстан','52':'Нижегородская обл.',
+    '54':'Новосибирская обл.','55':'Омская обл.','61':'Ростовская обл.','63':'Самарская обл.'
+  };
+  return {
+    inn,
+    kpp: '—', ogrn: '—',
+    name: `Компания ИНН ${inn}`,
+    nameFull: '—',
+    type: inn.length === 12 ? 'ИП' : 'Юридическое лицо',
+    status: 'Неизвестно (нет данных)',
+    regDate: '—',
+    address: '—',
+    region: regions[regionCode] || `Регион ${regionCode}`,
+    city: '—',
+    okved: '—', okvedName: '—', okvedAll: '—',
+    manager: '—', managerPost: '—',
+    employees: '—', capital: '—', revenue: '—', profit: '—',
+    taxSystem: '—', phones: '—', emails: '—', site: '—',
+    source: 'fallback'
+  };
+}
+
+function renderINNReport(c) {
+  document.getElementById('innCompanyName').textContent = c.name;
+
+  const isActive = c.status === 'Действующая';
+  const ageYears = c.regDate !== '—' ? Math.floor((Date.now() - new Date(c.regDate.split('.').reverse().join('-'))) / (365.25*24*3600*1000)) : null;
+
+  // Marketing analysis
+  const mktInsights = generateInnMarketingInsights(c, ageYears);
+
+  document.getElementById('innReport').innerHTML = `
+    <div class="inn-card-grid">
+      <div class="inn-block">
+        <div class="inn-block-title">📋 Основные реквизиты</div>
+        ${innRow('ИНН', c.inn)}
+        ${innRow('КПП', c.kpp)}
+        ${innRow('ОГРН', c.ogrn)}
+        ${innRow('Тип', c.type)}
+        ${innRow('Статус', c.status, isActive ? 'green' : 'red')}
+        ${innRow('Дата регистрации', c.regDate)}
+        ${ageYears !== null ? innRow('Возраст компании', ageYears + ' лет', ageYears > 5 ? 'green' : ageYears > 2 ? 'yellow' : 'red') : ''}
+        ${c.liquidDate ? innRow('Дата ликвидации', c.liquidDate, 'red') : ''}
+      </div>
+
+      <div class="inn-block">
+        <div class="inn-block-title">📍 Адрес и контакты</div>
+        ${innRow('Адрес', c.address)}
+        ${innRow('Регион', c.region)}
+        ${innRow('Город', c.city)}
+        ${innRow('Телефоны', c.phones)}
+        ${innRow('Email', c.emails)}
+        ${innRow('Сайт', c.site)}
+      </div>
+
+      <div class="inn-block">
+        <div class="inn-block-title">🏭 Деятельность (ОКВЭД)</div>
+        ${innRow('Основной ОКВЭД', c.okved)}
+        ${innRow('Описание', c.okvedName)}
+        ${c.okvedAll !== '—' ? innRow('Доп. виды', c.okvedAll) : ''}
+      </div>
+
+      <div class="inn-block">
+        <div class="inn-block-title">💰 Финансы и персонал</div>
+        ${innRow('Выручка (посл. год)', c.revenue, 'green')}
+        ${innRow('Чистая прибыль', c.profit)}
+        ${innRow('Уставной капитал', c.capital)}
+        ${innRow('Сотрудников', c.employees)}
+        ${innRow('Система налогообложения', c.taxSystem)}
+        ${innRow('Руководитель', c.manager)}
+        ${innRow('Должность', c.managerPost)}
+      </div>
+    </div>
+
+    <div class="inn-block" style="margin-bottom:16px">
+      <div class="inn-block-title">🎯 Маркетинговый анализ конкурента</div>
+      <div class="inn-marketing-grid">
+        ${mktInsights.map(ins => `
+          <div class="inn-marketing-card">
+            <h5>${ins.title}</h5>
+            <p>${ins.text}</p>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    ${c.source === 'fallback' ? `<div class="abc-insights" style="margin-top:0">
+      ⚠️ <strong>Данные не найдены через API.</strong> Рекомендую проверить ИНН вручную на:
+      <a href="https://egrul.nalog.ru/index.html" target="_blank" style="color:var(--blue)">egrul.nalog.ru</a> ·
+      <a href="https://www.list-org.com/search?type=inn&val=${c.inn}" target="_blank" style="color:var(--blue)">list-org.com</a> ·
+      <a href="https://zachestnyibiznes.ru/company/ul/${c.inn}" target="_blank" style="color:var(--blue)">zachestnyibiznes.ru</a>
+    </div>` : ''}
+  `;
+
+  document.getElementById('innResults').style.display = 'block';
+  renderInnSaved();
+  updateInnCompareTable();
+}
+
+function innRow(label, value, colorClass = '') {
+  return `<div class="inn-row"><span class="inn-label">${label}</span><span class="inn-value ${colorClass}">${value || '—'}</span></div>`;
+}
+
+function generateInnMarketingInsights(c, ageYears) {
+  const insights = [];
+
+  // Age & stability
+  if (ageYears !== null) {
+    if (ageYears >= 10) insights.push({ title: '🏛 Зрелый игрок', text: `${ageYears} лет на рынке. Вероятно устойчивые процессы, лояльная база клиентов. Конкурировать через инновации и скорость.` });
+    else if (ageYears >= 3) insights.push({ title: '📈 Растущий конкурент', text: `${ageYears} года на рынке. Активная фаза роста. Следи за их маркетингом и позиционированием.` });
+    else insights.push({ title: '🆕 Новичок на рынке', text: `Менее ${ageYears + 1} лет. Слабая история и репутация — используй это в коммуникации.` });
+  }
+
+  // Scale by employees
+  if (c.employees && c.employees !== '—') {
+    const emp = parseInt(c.employees);
+    if (emp > 500) insights.push({ title: '🏢 Крупная компания', text: `${emp} сотрудников. Медленные решения, большой бюджет. Выигрывай гибкостью и нишевым предложением.` });
+    else if (emp > 50) insights.push({ title: '🏬 Средний бизнес', text: `${emp} сотрудников. Профессиональная команда, структурированные процессы.` });
+    else if (emp > 0) insights.push({ title: '🏪 Малый бизнес', text: `${emp} сотрудников. Ограниченные ресурсы на маркетинг — ищи их слабые места.` });
+  }
+
+  // Region
+  if (c.region && c.region !== '—') {
+    insights.push({ title: '📍 География', text: `Зарегистрированы в: ${c.region}. Уточни реальный охват рынка — региональный или федеральный.` });
+  }
+
+  // OKVED
+  if (c.okvedName && c.okvedName !== '—') {
+    insights.push({ title: '🏭 Профиль бизнеса', text: c.okvedName.slice(0, 120) + (c.okvedName.length > 120 ? '…' : '') });
+  }
+
+  // Revenue analysis
+  if (c.revenue && c.revenue !== '—') {
+    insights.push({ title: '💰 Финансовая мощь', text: `Выручка: ${c.revenue}. Оцени долю рынка и возможный маркетинговый бюджет (обычно 3-15% от выручки).` });
+  }
+
+  // Always add action items
+  insights.push({ title: '🔍 Что проверить', text: 'Изучи их сайт инструментом SEO-аудит, каталог — через Анализ продуктов, маркетинг — поищи в соцсетях и рекламных кабинетах.' });
+
+  if (insights.length < 3) insights.push({ title: '📊 Рекомендация', text: 'Сравни с другими конкурентами — добавь несколько ИНН и получи сравнительную таблицу ниже.' });
+
+  return insights.slice(0, 6);
+}
+
+function renderInnSaved() {
+  const container = document.getElementById('innSavedList');
+  if (!innSaved.length) { container.innerHTML = ''; return; }
+  container.innerHTML = `
+    <h4 style="margin-bottom:12px">Сохранённые компании (${innSaved.length})</h4>
+    <div class="inn-saved-list">
+      ${innSaved.map((c, i) => `
+        <div class="inn-saved-item" onclick="renderINNReport(innSaved[${i}])">
+          <div>
+            <div class="inn-saved-name">${c.name}</div>
+            <div class="inn-saved-meta">ИНН ${c.inn} · ${c.status} · ${c.region}</div>
+          </div>
+          <button onclick="event.stopPropagation();innSaved.splice(${i},1);renderInnSaved();updateInnCompareTable()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:18px">×</button>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function updateInnCompareTable() {
+  const panel = document.getElementById('innComparePanel');
+  if (innSaved.length < 2) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  document.getElementById('innCompareBlock').style.display = 'block';
+
+  const fields = [
+    ['Статус', 'status'], ['Тип', 'type'], ['Регион', 'region'],
+    ['Дата регистрации', 'regDate'], ['ОКВЭД', 'okved'],
+    ['Деятельность', 'okvedName'], ['Выручка', 'revenue'],
+    ['Прибыль', 'profit'], ['Сотрудников', 'employees'],
+    ['Руководитель', 'manager'], ['Адрес', 'address']
+  ];
+
+  document.getElementById('innCompareTable').innerHTML = `
+    <thead>
+      <tr>
+        <th>Параметр</th>
+        ${innSaved.map(c => `<th>${c.name.slice(0, 30)}<br><span style="font-weight:400;color:var(--text3);font-size:11px">ИНН ${c.inn}</span></th>`).join('')}
+      </tr>
+    </thead>
+    <tbody>
+      ${fields.map(([label, key]) => `
+        <tr>
+          <td>${label}</td>
+          ${innSaved.map(c => `<td style="font-size:12px">${c[key] || '—'}</td>`).join('')}
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+}
+
+function exportINN() {
+  const c = innSaved[0];
+  if (!c) return;
+  const data = [
+    { Параметр: 'Название', Значение: c.name },
+    { Параметр: 'ИНН', Значение: c.inn },
+    { Параметр: 'КПП', Значение: c.kpp },
+    { Параметр: 'ОГРН', Значение: c.ogrn },
+    { Параметр: 'Тип', Значение: c.type },
+    { Параметр: 'Статус', Значение: c.status },
+    { Параметр: 'Дата регистрации', Значение: c.regDate },
+    { Параметр: 'Адрес', Значение: c.address },
+    { Параметр: 'Регион', Значение: c.region },
+    { Параметр: 'ОКВЭД', Значение: c.okved },
+    { Параметр: 'Деятельность', Значение: c.okvedName },
+    { Параметр: 'Выручка', Значение: c.revenue },
+    { Параметр: 'Прибыль', Значение: c.profit },
+    { Параметр: 'Сотрудников', Значение: c.employees },
+    { Параметр: 'Руководитель', Значение: c.manager + ' (' + c.managerPost + ')' },
+    { Параметр: 'Телефоны', Значение: c.phones },
+    { Параметр: 'Email', Значение: c.emails },
+    { Параметр: 'Сайт', Значение: c.site },
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [{ wch: 25 }, { wch: 60 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Данные компании');
+  XLSX.writeFile(wb, `ИНН-анализ-${c.inn}.xlsx`);
+}
+
+function exportInnCompare() {
+  if (innSaved.length < 2) return;
+  const fields = ['name','inn','type','status','regDate','region','okved','okvedName','revenue','profit','employees','manager','address'];
+  const labels = ['Название','ИНН','Тип','Статус','Дата рег.','Регион','ОКВЭД','Деятельность','Выручка','Прибыль','Сотрудников','Руководитель','Адрес'];
+  const data = innSaved.map(c => {
+    const row = {};
+    fields.forEach((f, i) => { row[labels[i]] = c[f] || '—'; });
+    return row;
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws, 'Сравнение компаний');
+  XLSX.writeFile(wb, 'Сравнение-конкурентов-ИНН.xlsx');
+}
+
+// ════════════════════════════════════════════
+//  08 — PDF SPELL CHECKER
+// ════════════════════════════════════════════
+
+let pdfErrors = [];
+let pdfPageCount = 0;
+let pdfFileName = '';
+
+function handlePDFUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 20 * 1024 * 1024) {
+    alert('Файл слишком большой. Максимум 20 МБ.'); return;
+  }
+  pdfFileName = file.name;
+  document.getElementById('pdfUploadArea').querySelector('.upload-text').textContent = '✅ ' + file.name;
+  document.getElementById('pdfUploadArea').style.borderColor = 'var(--green)';
+
+  const fileInfo = document.getElementById('pdfFileInfo');
+  fileInfo.style.display = 'block';
+  fileInfo.innerHTML = `📄 <strong>${file.name}</strong> · ${(file.size/1024).toFixed(0)} КБ · Нажми кнопку ниже для запуска проверки`;
+
+  // Auto-run after short delay
+  setTimeout(() => runPDFCheck(file), 300);
+}
+
+async function runPDFCheck(fileArg) {
+  const fileInput = document.getElementById('pdfFile');
+  const file = fileArg || fileInput.files[0];
+  if (!file) { alert('Сначала загрузи PDF файл'); return; }
+
+  const loading = document.getElementById('pdfLoading');
+  loading.style.display = 'flex';
+  document.getElementById('pdfResults').style.display = 'none';
+  pdfErrors = [];
+
+  try {
+    document.getElementById('pdfLoadingText').textContent = 'Читаю PDF...';
+    const pages = await extractPDFText(file);
+    pdfPageCount = pages.length;
+
+    document.getElementById('pdfLoadingText').textContent = `Проверяю орфографию (${pages.length} страниц)...`;
+
+    const lang = document.getElementById('pdfLang').value;
+    const ignoreCaps = document.getElementById('pdfIgnoreCaps').checked;
+    const ignoreNums = document.getElementById('pdfIgnoreNumbers').checked;
+    const ignoreUrls = document.getElementById('pdfIgnoreUrls').checked;
+
+    // Check each page with Yandex Speller
+    for (let i = 0; i < pages.length; i++) {
+      document.getElementById('pdfLoadingText').textContent = `Проверяю страницу ${i+1} из ${pages.length}...`;
+      if (!pages[i].trim()) continue;
+
+      const pageErrors = await checkSpelling(pages[i], i + 1, lang, ignoreCaps, ignoreNums, ignoreUrls);
+      pdfErrors.push(...pageErrors);
+
+      // Also find repeated words
+      const repeatErrors = findRepeatedWords(pages[i], i + 1);
+      pdfErrors.push(...repeatErrors);
+
+      // Rate limit: pause between requests
+      if (i < pages.length - 1) await new Promise(r => setTimeout(r, 200));
+    }
+
+    loading.style.display = 'none';
+    renderPDFResults(pages);
+
+  } catch(e) {
+    loading.style.display = 'none';
+    document.getElementById('pdfResults').style.display = 'block';
+    document.getElementById('pdfErrorList').innerHTML = `<div class="abc-insights">⚠️ Ошибка обработки PDF: ${e.message}.<br>Убедись что файл не защищён паролем и содержит текстовый слой (не скан).</div>`;
+  }
+}
+
+async function extractPDFText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        // Use PDF.js from CDN
+        if (!window.pdfjsLib) {
+          // Dynamically load PDF.js
+          await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+        const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(e.target.result) }).promise;
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          const text = content.items.map(item => item.str).join(' ');
+          pages.push(text);
+        }
+        resolve(pages);
+      } catch(err) {
+        reject(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function checkSpelling(text, pageNum, lang, ignoreCaps, ignoreNums, ignoreUrls) {
+  try {
+    // Clean text for API
+    let cleanText = text;
+    if (ignoreUrls) cleanText = cleanText.replace(/https?:\/\/\S+|www\.\S+|\S+@\S+\.\S+/g, ' ');
+    if (ignoreNums) cleanText = cleanText.replace(/\b\d[\d.,]*\b/g, ' ');
+
+    // Yandex Speller API (free, no key needed)
+    const params = new URLSearchParams({
+      text: cleanText.slice(0, 10000),
+      lang: lang,
+      options: ignoreCaps ? '512' : '0',
+      format: 'plain'
+    });
+
+    const response = await fetch(`https://speller.yandex.net/services/spellservice.json/checkText?${params}`);
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.map(err => ({
+      page: pageNum,
+      type: 'spell',
+      word: err.word,
+      suggestions: err.s ? err.s.slice(0, 3) : [],
+      context: getContext(text, err.pos, err.word.length),
+      code: err.code
+    })).filter(e => e.word && e.word.length > 1);
+  } catch(e) {
+    return [];
+  }
+}
+
+function findRepeatedWords(text, pageNum) {
+  const errors = [];
+  const words = text.match(/[а-яёА-ЯЁa-zA-Z]+/g) || [];
+  for (let i = 1; i < words.length; i++) {
+    if (words[i].toLowerCase() === words[i-1].toLowerCase() && words[i].length > 2) {
+      errors.push({
+        page: pageNum,
+        type: 'repeat',
+        word: words[i],
+        suggestions: [],
+        context: `…${words.slice(Math.max(0,i-2), i+3).join(' ')}…`,
+        code: 0
+      });
+    }
+  }
+  return errors;
+}
+
+function getContext(text, pos, len) {
+  const start = Math.max(0, pos - 30);
+  const end = Math.min(text.length, pos + len + 30);
+  return '…' + text.slice(start, pos) + '**' + text.slice(pos, pos + len) + '**' + text.slice(pos + len, end) + '…';
+}
+
+function renderPDFResults(pages) {
+  const spellCount = pdfErrors.filter(e => e.type === 'spell').length;
+  const repeatCount = pdfErrors.filter(e => e.type === 'repeat').length;
+  const pagesWithErrors = [...new Set(pdfErrors.map(e => e.page))].length;
+
+  document.getElementById('pdfSummary').innerHTML = `
+    <div class="pdf-stat"><div class="pdf-stat-val ${spellCount > 0 ? 'error' : 'ok'}">${spellCount}</div><div class="pdf-stat-label">Орфографических ошибок</div></div>
+    <div class="pdf-stat"><div class="pdf-stat-val ${repeatCount > 0 ? 'warn' : 'ok'}">${repeatCount}</div><div class="pdf-stat-label">Повторов слов</div></div>
+    <div class="pdf-stat"><div class="pdf-stat-val ${pagesWithErrors > 0 ? 'warn' : 'ok'}">${pagesWithErrors}</div><div class="pdf-stat-label">Страниц с ошибками</div></div>
+    <div class="pdf-stat"><div class="pdf-stat-val ok">${pdfPageCount}</div><div class="pdf-stat-label">Всего страниц</div></div>
+  `;
+
+  // Fill page filter
+  const pages2 = [...new Set(pdfErrors.map(e => e.page))].sort((a,b)=>a-b);
+  document.getElementById('pdfFilterPage').innerHTML =
+    '<option value="all">Все страницы</option>' +
+    pages2.map(p => `<option value="${p}">Страница ${p}</option>`).join('');
+
+  document.getElementById('pdfResults').style.display = 'block';
+  renderPDFErrors();
+}
+
+function renderPDFErrors() {
+  const filterPage = document.getElementById('pdfFilterPage').value;
+  const filterType = document.getElementById('pdfFilterType').value;
+  const search = document.getElementById('pdfSearch').value.toLowerCase();
+
+  let errors = pdfErrors.filter(e => {
+    if (filterPage !== 'all' && e.page !== parseInt(filterPage)) return false;
+    if (filterType !== 'all' && e.type !== filterType) return false;
+    if (search && !e.word.toLowerCase().includes(search) && !e.context.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  const container = document.getElementById('pdfErrorList');
+
+  if (!errors.length) {
+    container.innerHTML = pdfErrors.length === 0
+      ? '<div class="abc-insights">🎉 <strong>Ошибок не найдено!</strong> Текст прошёл проверку орфографии.</div>'
+      : '<div class="abc-insights">Нет ошибок по выбранным фильтрам.</div>';
+    return;
+  }
+
+  const typeLabels = { spell: 'Орфография', repeat: 'Повтор', punct: 'Пунктуация' };
+  container.innerHTML = errors.slice(0, 200).map(e => `
+    <div class="pdf-error-item ${e.type}">
+      <div class="pdf-error-page">Стр. ${e.page}</div>
+      <div class="pdf-error-type">${typeLabels[e.type] || e.type}</div>
+      <div class="pdf-error-word">
+        ${e.context.replace(`**${e.word}**`, `<strong>${e.word}</strong>`).replace(/\*\*/g, '')}
+      </div>
+      <div class="pdf-error-suggest">${e.suggestions.length ? '→ ' + e.suggestions.join(', ') : ''}</div>
+    </div>
+  `).join('') + (errors.length > 200 ? `<div class="abc-insights">Показаны первые 200 из ${errors.length} ошибок. Скачай полный отчёт.</div>` : '');
+}
+
+async function exportPDFReport() {
+  if (!pdfErrors.length && pdfPageCount === 0) { alert('Сначала загрузи и проверь PDF'); return; }
+
+  // Load jsPDF
+  if (!window.jspdf) {
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  // Font setup — use built-in for Cyrillic via UTF-8
+  doc.setFont('helvetica');
+
+  const pageW = 210, margin = 15, contentW = pageW - margin * 2;
+  let y = margin;
+
+  const addText = (text, size, bold, color) => {
+    doc.setFontSize(size);
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    if (color) doc.setTextColor(...color);
+    else doc.setTextColor(30, 30, 30);
+    const lines = doc.splitTextToSize(text, contentW);
+    if (y + lines.length * (size * 0.4) > 290) { doc.addPage(); y = margin; }
+    doc.text(lines, margin, y);
+    y += lines.length * (size * 0.45) + 2;
+  };
+
+  const addLine = () => {
+    doc.setDrawColor(220, 220, 220);
+    doc.line(margin, y, pageW - margin, y);
+    y += 5;
+  };
+
+  // Header
+  doc.setFillColor(10, 10, 15);
+  doc.rect(0, 0, 210, 30, 'F');
+  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+  doc.setTextColor(232, 255, 71);
+  doc.text('MarketKit', margin, 15);
+  doc.setFontSize(11); doc.setFont('helvetica', 'normal');
+  doc.setTextColor(200, 200, 220);
+  doc.text('Otchet proverki orfografii PDF', margin, 22);
+  y = 38;
+
+  // Meta
+  addText('Fayl: ' + pdfFileName, 11, false, [100, 100, 130]);
+  addText('Data: ' + new Date().toLocaleDateString('ru-RU') + '  |  Stranits: ' + pdfPageCount, 10, false, [100,100,130]);
+  y += 4; addLine();
+
+  // Summary
+  const spellC = pdfErrors.filter(e=>e.type==='spell').length;
+  const repC = pdfErrors.filter(e=>e.type==='repeat').length;
+  addText('SVODKA', 13, true, [100, 100, 180]);
+  y += 2;
+
+  const stats = [
+    ['Orfograficheskih oshibok:', String(spellC), spellC > 0 ? [220,50,50] : [50,180,100]],
+    ['Povtorov slov:', String(repC), repC > 0 ? [200,120,50] : [50,180,100]],
+    ['Stranits s oshibkami:', String([...new Set(pdfErrors.map(e=>e.page))].length), [80,80,120]],
+    ['Vsego stranits:', String(pdfPageCount), [80,80,120]],
+  ];
+
+  stats.forEach(([label, val, color]) => {
+    doc.setFontSize(11); doc.setFont('helvetica', 'normal'); doc.setTextColor(60,60,60);
+    doc.text(label, margin, y);
+    doc.setFont('helvetica', 'bold'); doc.setTextColor(...color);
+    doc.text(val, margin + 75, y);
+    y += 7;
+  });
+
+  y += 4; addLine();
+
+  // Errors list
+  addText('SPISOK OSHIBOK', 13, true, [100,100,180]);
+  y += 2;
+
+  if (pdfErrors.length === 0) {
+    addText('Oshibok ne naydeno! Tekst proshel proverku.', 12, false, [50,180,100]);
+  } else {
+    const typeMap = { spell: 'Orfografiya', repeat: 'Povtor', punct: 'Punktuatsiya' };
+    pdfErrors.slice(0, 300).forEach((e, i) => {
+      if (y > 275) { doc.addPage(); y = margin; }
+      const prefix = `[Str.${e.page}] [${typeMap[e.type]||e.type}]`;
+      const suggest = e.suggestions.length ? ' -> ' + e.suggestions.join(', ') : '';
+      const line = `${i+1}. ${prefix}  "${e.word}"${suggest}`;
+      doc.setFontSize(9);
+      doc.setFont('helvetica', e.type === 'spell' ? 'bold' : 'normal');
+      doc.setTextColor(e.type === 'spell' ? 180 : 150, 50, 50);
+      doc.text(String(i+1) + '.', margin, y);
+      doc.setTextColor(60,60,60); doc.setFont('helvetica','normal');
+      doc.text(prefix, margin + 8, y);
+      doc.setTextColor(e.type === 'spell' ? 180 : 100, 50, 50); doc.setFont('helvetica','bold');
+      doc.text('"' + e.word + '"', margin + 52, y);
+      if (suggest) {
+        doc.setTextColor(50, 150, 80); doc.setFont('helvetica','normal');
+        doc.text(suggest, margin + 52 + doc.getTextWidth('"' + e.word + '"') + 2, y);
+      }
+      y += 6;
+    });
+    if (pdfErrors.length > 300) {
+      addText('... i esche ' + (pdfErrors.length - 300) + ' oshibok', 9, false, [150,100,100]);
+    }
+  }
+
+  // Footer
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8); doc.setFont('helvetica','normal'); doc.setTextColor(180,180,180);
+    doc.text('MarketKit © Tsypkina Nadezhda  |  t.me/nadya_tsypkina', margin, 293);
+    doc.text(`${i} / ${pageCount}`, pageW - margin, 293, { align: 'right' });
+  }
+
+  doc.save('Proverka-orfografii-' + pdfFileName.replace('.pdf','') + '.pdf');
 }
 
 // ════════════════════════════════════════════

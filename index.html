@@ -19,6 +19,9 @@
     <a href="#utm" class="nav-link" data-tool="utm">UTM-генератор</a>
     <a href="#media" class="nav-link" data-tool="media">Медиаплан</a>
     <a href="#competitors" class="nav-link" data-tool="competitors">Конкуренты</a>
+    <a href="#products" class="nav-link" data-tool="products">Продукты</a>
+    <a href="#inn" class="nav-link" data-tool="inn">Анализ по ИНН</a>
+    <a href="#pdfcheck" class="nav-link" data-tool="pdfcheck">Проверка PDF</a>
   </nav>
 </header>
 
@@ -28,7 +31,7 @@
   <section class="hero">
     <div class="hero-eyebrow">Профессиональные инструменты</div>
     <h1>Всё что нужно<br><span class="accent">маркетологу</span><br>в одном месте</h1>
-    <p class="hero-sub">5 мощных инструментов. Без регистрации. Без подписки.<br>Работает прямо в браузере — данные никуда не уходят.</p>
+    <p class="hero-sub">8 мощных инструментов. Без регистрации. Без подписки.<br>Работает прямо в браузере — данные никуда не уходят.</p>
     <div class="hero-tools">
       <div class="tool-card" onclick="showTool('abc')">
         <div class="tool-icon">📊</div>
@@ -54,6 +57,21 @@
         <div class="tool-icon">🏆</div>
         <div class="tool-name">Анализ конкурентов</div>
         <div class="tool-desc">Структурированный разбор + экспорт</div>
+      </div>
+      <div class="tool-card" onclick="showTool('products')">
+        <div class="tool-icon">🔬</div>
+        <div class="tool-name">Анализ продуктов</div>
+        <div class="tool-desc">Вставь URL каталога → таблица товаров конкурента</div>
+      </div>
+      <div class="tool-card" onclick="showTool('inn')">
+        <div class="tool-icon">🏢</div>
+        <div class="tool-name">Анализ по ИНН</div>
+        <div class="tool-desc">Введи ИНН → открытые данные о компании конкурента</div>
+      </div>
+      <div class="tool-card" onclick="showTool('pdfcheck')">
+        <div class="tool-icon">📋</div>
+        <div class="tool-name">Проверка PDF</div>
+        <div class="tool-desc">Загрузи макет → орфография, опечатки, отчёт PDF</div>
       </div>
     </div>
   </section>
@@ -344,12 +362,217 @@
     </div>
   </section>
 
+  <!-- ===== PRODUCT ANALYSIS ===== -->
+  <section class="tool-section" id="tool-products">
+    <div class="section-header">
+      <span class="section-num">06</span>
+      <div>
+        <h2>Анализ продуктов конкурентов</h2>
+        <p>Вставь URL страницы каталога конкурента — получи таблицу товаров с характеристиками. Добавляй несколько сайтов для сравнения</p>
+      </div>
+    </div>
+
+    <div class="tool-body full-width">
+      <div class="panel">
+        <h3>Источники для анализа</h3>
+        <div class="url-input-row">
+          <input type="url" id="productUrl" placeholder="https://petrovich.ru/catalog/plitochnyy-kley/" class="url-input">
+          <input type="text" id="productSiteName" placeholder="Название магазина" style="max-width:200px">
+          <button class="btn-primary" onclick="parseProducts()">Загрузить →</button>
+        </div>
+        <div class="seo-options" style="margin-top:12px">
+          <label class="checkbox-label"><input type="checkbox" id="prodCheckName" checked> Название</label>
+          <label class="checkbox-label"><input type="checkbox" id="prodCheckPrice" checked> Цена</label>
+          <label class="checkbox-label"><input type="checkbox" id="prodCheckBrand" checked> Бренд</label>
+          <label class="checkbox-label"><input type="checkbox" id="prodCheckSpecs" checked> Характеристики</label>
+          <label class="checkbox-label"><input type="checkbox" id="prodCheckRating"> Рейтинг</label>
+        </div>
+        <div id="productLoading" style="display:none" class="loading-bar">
+          <div class="loading-progress"></div>
+          <span id="productLoadingText">Загружаю страницу...</span>
+        </div>
+
+        <div id="productSources" class="product-sources"></div>
+      </div>
+
+      <div class="panel" id="productResults" style="display:none">
+        <div class="results-header">
+          <h3>Таблица продуктов</h3>
+          <div style="display:flex;gap:8px">
+            <button class="btn-export" onclick="exportProducts()">⬇ Скачать Excel</button>
+            <button class="btn-secondary" style="margin-top:0" onclick="clearProducts()">🗑 Очистить</button>
+          </div>
+        </div>
+
+        <div id="productStats" class="product-stats"></div>
+
+        <div style="margin:16px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <label style="text-transform:none;font-size:13px;letter-spacing:0;margin:0">Фильтр по сайту:</label>
+          <select id="productFilterSite" onchange="renderProductTable()" style="width:auto;min-width:160px">
+            <option value="all">Все сайты</option>
+          </select>
+          <label style="text-transform:none;font-size:13px;letter-spacing:0;margin:0">Сортировка:</label>
+          <select id="productSort" onchange="renderProductTable()" style="width:auto;min-width:160px">
+            <option value="default">По умолчанию</option>
+            <option value="price_asc">Цена ↑</option>
+            <option value="price_desc">Цена ↓</option>
+            <option value="name">По названию</option>
+          </select>
+          <input type="text" id="productSearch" placeholder="Поиск по названию..." oninput="renderProductTable()" style="width:200px">
+        </div>
+
+        <div class="table-wrap">
+          <table class="data-table" id="productTable"></table>
+        </div>
+      </div>
+
+      <div class="panel" id="productInsightPanel" style="display:none">
+        <h3>📊 Инсайты по ценообразованию</h3>
+        <div id="productInsights" class="seo-report-grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== INN COMPANY ANALYSIS ===== -->
+  <section class="tool-section" id="tool-inn">
+    <div class="section-header">
+      <span class="section-num">07</span>
+      <div>
+        <h2>Анализ компании по ИНН</h2>
+        <p>Введи ИНН конкурента — получи открытые данные: регистрация, выручка, сотрудники, адрес, руководство и маркетинговый анализ</p>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Поиск компании</h3>
+        <div class="url-input-row">
+          <input type="text" id="innInput" placeholder="Введи ИНН (10 или 12 цифр)" class="url-input" maxlength="12"
+            oninput="this.value=this.value.replace(/\D/g,'')">
+          <button class="btn-primary" onclick="runINN()">Найти →</button>
+        </div>
+        <div class="seo-options" style="margin-top:8px">
+          <span style="font-size:12px;color:var(--text3)">Примеры ИНН: </span>
+          <span class="quick-tags" style="display:inline-flex">
+            <span onclick="document.getElementById('innInput').value='7707083893'">Сбербанк</span>
+            <span onclick="document.getElementById('innInput').value='7734307378'">Леруа</span>
+            <span onclick="document.getElementById('innInput').value='5047055192'">Петрович</span>
+          </span>
+        </div>
+        <div id="innLoading" style="display:none" class="loading-bar">
+          <div class="loading-progress"></div>
+          <span>Запрашиваю открытые данные...</span>
+        </div>
+        <div id="innError" style="display:none;margin-top:16px" class="abc-insights"></div>
+
+        <div id="innSavedList" style="margin-top:24px"></div>
+      </div>
+
+      <div class="panel" id="innResults" style="display:none">
+        <div class="results-header">
+          <h3 id="innCompanyName">—</h3>
+          <button class="btn-export" onclick="exportINN()">⬇ Скачать отчёт</button>
+        </div>
+        <div id="innReport"></div>
+      </div>
+    </div>
+
+    <div class="tool-body" style="margin-top:24px" id="innCompareBlock" style="display:none">
+      <div class="panel" id="innComparePanel" style="display:none">
+        <div class="results-header">
+          <h3>Сравнение компаний</h3>
+          <button class="btn-export" onclick="exportInnCompare()">⬇ Скачать сравнение</button>
+        </div>
+        <div class="table-wrap"><table class="data-table comparison-table" id="innCompareTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== PDF SPELL CHECKER ===== -->
+  <section class="tool-section" id="tool-pdfcheck">
+    <div class="section-header">
+      <span class="section-num">08</span>
+      <div>
+        <h2>Проверка орфографии PDF-макетов</h2>
+        <p>Загрузи PDF — найдём все орфографические ошибки и опечатки с указанием страницы. Скачай готовый PDF-отчёт</p>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="panel">
+        <h3>Загрузка файла</h3>
+        <div class="upload-area" id="pdfUploadArea" onclick="document.getElementById('pdfFile').click()">
+          <div class="upload-icon">📄</div>
+          <div class="upload-text">Нажми или перетащи PDF файл</div>
+          <div class="upload-hint">Поддерживаются текстовые PDF (не сканы). Макс. размер — 20 МБ</div>
+          <input type="file" id="pdfFile" accept=".pdf" style="display:none" onchange="handlePDFUpload(event)">
+        </div>
+
+        <div style="margin-top:20px">
+          <h4>Настройки проверки</h4>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Язык</label>
+              <select id="pdfLang">
+                <option value="ru">Русский</option>
+                <option value="uk">Украинский</option>
+                <option value="en">Английский</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Строгость</label>
+              <select id="pdfStrict">
+                <option value="normal">Обычная</option>
+                <option value="strict">Строгая (включая стиль)</option>
+              </select>
+            </div>
+          </div>
+          <div class="seo-options" style="margin-top:12px">
+            <label class="checkbox-label"><input type="checkbox" id="pdfIgnoreCaps" checked> Игнорировать аббревиатуры (ООО, ИНН)</label>
+            <label class="checkbox-label"><input type="checkbox" id="pdfIgnoreNumbers" checked> Игнорировать числа</label>
+            <label class="checkbox-label"><input type="checkbox" id="pdfIgnoreUrls" checked> Игнорировать URL и email</label>
+          </div>
+        </div>
+
+        <div id="pdfLoading" style="display:none;margin-top:16px" class="loading-bar">
+          <div class="loading-progress" style="animation-duration:8s"></div>
+          <span id="pdfLoadingText">Читаю PDF...</span>
+        </div>
+
+        <div id="pdfFileInfo" style="display:none;margin-top:16px" class="abc-insights"></div>
+      </div>
+
+      <div class="panel" id="pdfResults" style="display:none">
+        <div class="results-header">
+          <h3>Результаты проверки</h3>
+          <button class="btn-export" onclick="exportPDFReport()">⬇ Скачать PDF-отчёт</button>
+        </div>
+        <div id="pdfSummary" class="pdf-summary"></div>
+        <div style="margin:16px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <select id="pdfFilterPage" onchange="renderPDFErrors()" style="width:auto;min-width:150px">
+            <option value="all">Все страницы</option>
+          </select>
+          <select id="pdfFilterType" onchange="renderPDFErrors()" style="width:auto;min-width:160px">
+            <option value="all">Все типы ошибок</option>
+            <option value="spell">Орфография</option>
+            <option value="repeat">Повторы слов</option>
+            <option value="punct">Пунктуация</option>
+          </select>
+          <input type="text" id="pdfSearch" placeholder="Поиск по тексту..." oninput="renderPDFErrors()" style="width:180px">
+        </div>
+        <div id="pdfErrorList"></div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer>
   <div class="footer-inner">
     <div class="footer-logo">MarketKit</div>
-    <div class="footer-note">Данные обрабатываются локально в браузере и никуда не передаются</div>
+    <div class="footer-copy">
+      <span>© 2025 Цыпкина Надежда</span>
+      <a href="https://t.me/nadya_tsypkina" target="_blank" class="tg-link">✈ @nadya_tsypkina</a>
+    </div>
+    <div class="footer-note">Данные обрабатываются локально · Без регистрации · Бесплатно</div>
   </div>
 </footer>
 
